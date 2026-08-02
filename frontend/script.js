@@ -1409,17 +1409,42 @@ document.addEventListener('keydown', (e)=>{
 /* ============================================================
    INIT / REFRESH
 ============================================================ */
-async function initApp(){
+async function initApp() {
+    console.log("1");
     const isAdmin = state.role === 'admin';
+
+    console.log("2");
     document.body.classList.toggle('role-user', !isAdmin);
-    document.getElementById('displayRole').textContent = isAdmin ? 'Administrator' : 'User';
+
+    console.log("3");
+    document.getElementById('displayRole').textContent =
+        isAdmin ? 'Administrator' : 'User';
+
+    console.log("4");
     updateUserDisplay();
+
+    console.log("5");
     loadProfileIntoForm();
+
+    console.log("6");
     loadInstitutionSettings();
+
+    console.log("7");
     await fetchStudents();
+
+    console.log("8");
     fetchStudentsPage();
-    if(isAdmin){ fetchUsers(); fetchAudit(); }
-    if(!isAdmin) switchView('attendance');
+
+    console.log("9");
+    if (isAdmin) {
+        fetchUsers();
+        fetchAudit();
+    }
+
+    console.log("10");
+    if (!isAdmin) switchView('attendance');
+
+    console.log("DONE");
 }
 
 function init(){
