@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Cohort — University ERP System</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@500;700&display=swap" rel="stylesheet">
+<script src="vendor/chart.umd.min.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -22,7 +22,386 @@
 
 <!-- LOGIN PAGE -->
 <div class="login-overlay" id="loginOverlay">
-  <div class="card login-card">
+  <!-- CIME CINEMATIC CAMPUS BANNER (top strip — pure scene, no text) -->
+  <header class="cime-banner" aria-label="CIME Bhubaneswar — futuristic campus">
+    <svg class="cb-scene" viewBox="0 0 1920 500" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="skyG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#04102e"/>
+          <stop offset="55%" stop-color="#0a1e52"/>
+          <stop offset="100%" stop-color="#1d3f96"/>
+        </linearGradient>
+        <linearGradient id="groundG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#13254f"/>
+          <stop offset="100%" stop-color="#04102e"/>
+        </linearGradient>
+        <linearGradient id="buildG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#22356f"/>
+          <stop offset="100%" stop-color="#0e1838"/>
+        </linearGradient>
+        <linearGradient id="wingG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#2a407c"/>
+          <stop offset="100%" stop-color="#101c40"/>
+        </linearGradient>
+        <linearGradient id="towG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#1d2f63"/>
+          <stop offset="100%" stop-color="#0d1736"/>
+        </linearGradient>
+        <linearGradient id="colG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#3b5fc0"/>
+          <stop offset="100%" stop-color="#16224d"/>
+        </linearGradient>
+        <linearGradient id="doorGlass" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#ffd76b"/>
+          <stop offset="100%" stop-color="#ff9f43"/>
+        </linearGradient>
+        <linearGradient id="beamG" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0%" stop-color="#7cc4ff" stop-opacity="0.32"/>
+          <stop offset="100%" stop-color="#7cc4ff" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="reflG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#3f7ef0" stop-opacity="0.30"/>
+          <stop offset="100%" stop-color="#3f7ef0" stop-opacity="0"/>
+        </linearGradient>
+        <radialGradient id="doorGlow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#ffd76b" stop-opacity="0.85"/>
+          <stop offset="60%" stop-color="#ffb648" stop-opacity="0.35"/>
+          <stop offset="100%" stop-color="#ffb648" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="poolG" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#ffd76b" stop-opacity="0.20"/>
+          <stop offset="100%" stop-color="#ffd76b" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="beaconGlow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#ffd76b" stop-opacity="0.9"/>
+          <stop offset="100%" stop-color="#ffd76b" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="moonGlow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#cfe4ff" stop-opacity="0.5"/>
+          <stop offset="100%" stop-color="#cfe4ff" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- Night sky -->
+      <rect width="1920" height="500" fill="url(#skyG)"/>
+
+      <!-- Stars -->
+      <g fill="#d7e8ff">
+        <circle cx="80" cy="60" r="1.6" opacity="0.9"/><circle cx="180" cy="130" r="1.2" opacity="0.6"/>
+        <circle cx="270" cy="45" r="1.8" opacity="0.85"/><circle cx="360" cy="150" r="1.1" opacity="0.5"/>
+        <circle cx="470" cy="70" r="1.5" opacity="0.75"/><circle cx="560" cy="40" r="1.2" opacity="0.6"/>
+        <circle cx="650" cy="120" r="1.7" opacity="0.8"/><circle cx="740" cy="55" r="1.1" opacity="0.55"/>
+        <circle cx="820" cy="150" r="1.4" opacity="0.7"/><circle cx="940" cy="40" r="1.6" opacity="0.85"/>
+        <circle cx="1030" cy="110" r="1.2" opacity="0.6"/><circle cx="1120" cy="55" r="1.8" opacity="0.8"/>
+        <circle cx="1210" cy="140" r="1.1" opacity="0.5"/><circle cx="1310" cy="45" r="1.5" opacity="0.75"/>
+        <circle cx="1410" cy="120" r="1.2" opacity="0.6"/><circle cx="1500" cy="60" r="1.7" opacity="0.85"/>
+        <circle cx="1780" cy="180" r="1.4" opacity="0.7"/><circle cx="1860" cy="60" r="1.2" opacity="0.6"/>
+        <circle cx="120" cy="230" r="1.1" opacity="0.5"/><circle cx="240" cy="280" r="1.5" opacity="0.7"/>
+        <circle cx="1460" cy="230" r="1.6" opacity="0.8"/><circle cx="1720" cy="300" r="1.2" opacity="0.55"/>
+        <circle cx="1560" cy="280" r="1.1" opacity="0.5"/><circle cx="410" cy="240" r="1.3" opacity="0.6"/>
+      </g>
+
+      <!-- Moon + halo -->
+      <circle cx="1685" cy="140" r="46" fill="url(#moonGlow)"/>
+      <circle cx="1685" cy="140" r="24" fill="#eaf3ff" opacity="0.95"/>
+      <circle cx="1677" cy="133" r="6" fill="#d5e6ff" opacity="0.7"/>
+      <circle cx="1694" cy="148" r="4" fill="#d5e6ff" opacity="0.55"/>
+
+      <!-- Distant skyline silhouettes -->
+      <g fill="#0b1636" opacity="0.85">
+        <rect x="0" y="360" width="70" height="70"/><rect x="74" y="380" width="48" height="50"/>
+        <rect x="126" y="352" width="58" height="78"/><rect x="188" y="372" width="42" height="58"/>
+        <rect x="234" y="390" width="70" height="40"/><rect x="308" y="368" width="52" height="62"/>
+        <rect x="364" y="382" width="60" height="48"/><rect x="428" y="358" width="46" height="72"/>
+        <rect x="1400" y="370" width="60" height="60"/><rect x="1464" y="386" width="46" height="44"/>
+        <rect x="1514" y="356" width="56" height="74"/><rect x="1574" y="376" width="40" height="54"/>
+        <rect x="1618" y="390" width="64" height="40"/><rect x="1686" y="366" width="50" height="64"/>
+        <rect x="1740" y="380" width="56" height="50"/><rect x="1800" y="358" width="44" height="72"/>
+        <rect x="1848" y="374" width="72" height="56"/>
+      </g>
+      <g fill="#ffd76b" opacity="0.8">
+        <rect x="8" y="368" width="4" height="5"/><rect x="20" y="382" width="4" height="5"/>
+        <rect x="136" y="360" width="4" height="5"/><rect x="150" y="374" width="4" height="5"/>
+        <rect x="316" y="376" width="4" height="5"/><rect x="438" y="366" width="4" height="5"/>
+        <rect x="1412" y="378" width="4" height="5"/><rect x="1526" y="364" width="4" height="5"/>
+        <rect x="1696" y="374" width="4" height="5"/><rect x="1812" y="366" width="4" height="5"/>
+      </g>
+
+      <!-- Ground -->
+      <rect x="0" y="430" width="1920" height="70" fill="url(#groundG)"/>
+      <line x1="0" y1="430" x2="1920" y2="430" stroke="rgba(140,190,255,0.16)" stroke-width="2"/>
+
+      <!-- Light beams from the entrance -->
+      <path d="M915 400 L1210 40 L1310 40 L970 400 Z" fill="url(#beamG)" opacity="0.5"/>
+      <path d="M915 400 L620 40 L520 40 L860 400 Z" fill="url(#beamG)" opacity="0.32"/>
+
+      <!-- Ground reflection under the building -->
+      <rect x="650" y="430" width="540" height="44" fill="url(#reflG)"/>
+      <ellipse cx="915" cy="452" rx="115" ry="15" fill="url(#poolG)"/>
+
+      <!-- Left wing -->
+      <g>
+        <rect x="660" y="300" width="140" height="130" fill="url(#wingG)"/>
+        <line x1="660" y1="300" x2="800" y2="300" stroke="rgba(150,200,255,0.4)" stroke-width="2"/>
+        <rect x="666" y="306" width="6" height="124" fill="rgba(140,200,255,0.35)"/>
+        <rect x="790" y="306" width="6" height="124" fill="rgba(140,200,255,0.35)"/>
+        <rect x="676" y="288" width="22" height="10" fill="#0c1532"/><rect x="700" y="292" width="16" height="8" fill="#0c1532"/>
+      </g>
+      <!-- Right wing -->
+      <g>
+        <rect x="1030" y="300" width="140" height="130" fill="url(#wingG)"/>
+        <line x1="1030" y1="300" x2="1170" y2="300" stroke="rgba(150,200,255,0.4)" stroke-width="2"/>
+        <rect x="1036" y="306" width="6" height="124" fill="rgba(140,200,255,0.35)"/>
+        <rect x="1160" y="306" width="6" height="124" fill="rgba(140,200,255,0.35)"/>
+        <rect x="1140" y="288" width="22" height="10" fill="#0c1532"/><rect x="1116" y="292" width="16" height="8" fill="#0c1532"/>
+      </g>
+      <!-- Main block -->
+      <g>
+        <rect x="800" y="235" width="230" height="195" fill="url(#buildG)"/>
+        <line x1="800" y1="235" x2="1030" y2="235" stroke="rgba(150,200,255,0.5)" stroke-width="2.5"/>
+        <rect x="806" y="241" width="7" height="189" fill="rgba(140,200,255,0.4)"/>
+        <rect x="1020" y="241" width="7" height="189" fill="rgba(140,200,255,0.4)"/>
+        <rect x="812" y="244" width="206" height="16" fill="url(#colG)" opacity="0.55"/>
+      </g>
+
+      <!-- Windows — main block (4x4, mixed lit/dark) -->
+      <g>
+        <rect x="827" y="272" width="26" height="28" fill="#0a1330"/><rect x="877" y="272" width="26" height="28" fill="#0a1330"/>
+        <rect x="927" y="272" width="26" height="28" fill="#0a1330"/><rect x="977" y="272" width="26" height="28" fill="#0a1330"/>
+        <rect x="827" y="312" width="26" height="28" fill="#0a1330"/><rect x="877" y="312" width="26" height="28" fill="#0a1330"/>
+        <rect x="927" y="312" width="26" height="28" fill="#0a1330"/><rect x="977" y="312" width="26" height="28" fill="#0a1330"/>
+        <rect x="827" y="352" width="26" height="28" fill="#0a1330"/><rect x="877" y="352" width="26" height="28" fill="#0a1330"/>
+        <rect x="927" y="352" width="26" height="28" fill="#0a1330"/><rect x="977" y="352" width="26" height="28" fill="#0a1330"/>
+        <rect x="827" y="392" width="26" height="28" fill="#0a1330"/><rect x="877" y="392" width="26" height="28" fill="#0a1330"/>
+        <rect x="927" y="392" width="26" height="28" fill="#0a1330"/><rect x="977" y="392" width="26" height="28" fill="#0a1330"/>
+        <g class="win-lit">
+          <rect x="827" y="272" width="26" height="28" fill="#9fd0ff"/><rect x="927" y="272" width="26" height="28" fill="#9fd0ff"/>
+          <rect x="877" y="312" width="26" height="28" fill="#9fd0ff"/><rect x="977" y="312" width="26" height="28" fill="#9fd0ff"/>
+          <rect x="877" y="352" width="26" height="28" fill="#9fd0ff"/><rect x="977" y="352" width="26" height="28" fill="#9fd0ff"/>
+          <rect x="927" y="392" width="26" height="28" fill="#9fd0ff"/><rect x="827" y="392" width="26" height="28" fill="#9fd0ff"/>
+        </g>
+        <g class="win-warm">
+          <rect x="977" y="272" width="26" height="28" fill="#ffd76b"/><rect x="927" y="312" width="26" height="28" fill="#ffd76b"/>
+          <rect x="827" y="352" width="26" height="28" fill="#ffd76b"/><rect x="877" y="392" width="26" height="28" fill="#ffd76b"/>
+        </g>
+      </g>
+
+      <!-- Windows — wings (2x3 each) -->
+      <g>
+        <rect x="692" y="330" width="26" height="26" fill="#0a1330"/><rect x="742" y="330" width="26" height="26" fill="#0a1330"/>
+        <rect x="692" y="366" width="26" height="26" fill="#0a1330"/><rect x="742" y="366" width="26" height="26" fill="#0a1330"/>
+        <rect x="692" y="402" width="26" height="26" fill="#0a1330"/><rect x="742" y="402" width="26" height="26" fill="#0a1330"/>
+        <rect x="1062" y="330" width="26" height="26" fill="#0a1330"/><rect x="1112" y="330" width="26" height="26" fill="#0a1330"/>
+        <rect x="1062" y="366" width="26" height="26" fill="#0a1330"/><rect x="1112" y="366" width="26" height="26" fill="#0a1330"/>
+        <rect x="1062" y="402" width="26" height="26" fill="#0a1330"/><rect x="1112" y="402" width="26" height="26" fill="#0a1330"/>
+        <g class="win-lit">
+          <rect x="692" y="330" width="26" height="26" fill="#9fd0ff"/><rect x="692" y="402" width="26" height="26" fill="#9fd0ff"/>
+          <rect x="1062" y="366" width="26" height="26" fill="#9fd0ff"/><rect x="1112" y="402" width="26" height="26" fill="#9fd0ff"/>
+        </g>
+        <g class="win-warm">
+          <rect x="742" y="366" width="26" height="26" fill="#ffd76b"/><rect x="1112" y="330" width="26" height="26" fill="#ffd76b"/>
+        </g>
+      </g>
+
+      <!-- Central tower + spire + beacon -->
+      <g>
+        <rect x="880" y="184" width="70" height="51" fill="url(#towG)"/>
+        <rect x="874" y="178" width="82" height="7" fill="#22356f"/>
+        <path d="M885 180 L915 128 L945 180 Z" fill="#1a2b5e"/>
+        <rect x="908" y="110" width="14" height="20" fill="#1a2b5e"/>
+        <circle cx="915" cy="104" r="16" fill="url(#beaconGlow)"/>
+        <circle cx="915" cy="104" r="4.5" fill="#ffd76b" class="cb-beacon"/>
+      </g>
+
+      <!-- Entrance (arched, glowing) -->
+      <g>
+        <circle cx="915" cy="402" r="66" fill="url(#doorGlow)"/>
+        <path d="M877 430 V392 a38 38 0 0 1 76 0 V430 Z" fill="url(#doorGlass)"/>
+        <path d="M887 430 V396 a28 28 0 0 1 56 0 V430 Z" fill="#ffcf7a" opacity="0.85"/>
+        <line x1="915" y1="368" x2="915" y2="430" stroke="#0d1636" stroke-width="2" opacity="0.6"/>
+        <rect x="874" y="358" width="9" height="72" fill="url(#colG)"/>
+        <rect x="946" y="358" width="9" height="72" fill="url(#colG)"/>
+        <rect x="870" y="354" width="17" height="7" fill="#16224d"/>
+        <rect x="942" y="354" width="17" height="7" fill="#16224d"/>
+        <rect x="862" y="416" width="106" height="13" rx="3" fill="#0d1636"/>
+        <circle cx="885" cy="430" r="2.6" fill="#ffd76b" class="cb-beacon"/>
+        <circle cx="915" cy="430" r="2.6" fill="#ffd76b" class="cb-beacon"/>
+        <circle cx="945" cy="430" r="2.6" fill="#ffd76b" class="cb-beacon"/>
+        <rect x="868" y="430" width="94" height="9" fill="#141f47"/>
+        <rect x="878" y="439" width="74" height="8" fill="#101a3e"/>
+      </g>
+
+      <!-- Trees (silhouettes) -->
+      <g fill="#050d24">
+        <path d="M560 300 L592 430 H528 Z"/><path d="M584 320 L616 430 H552 Z"/>
+        <circle cx="634" cy="392" r="26"/><circle cx="652" cy="404" r="18"/>
+        <rect x="1248" y="356" width="16" height="74" fill="#050d24"/>
+        <path d="M1256 296 L1292 430 H1220 Z"/>
+        <circle cx="1330" cy="398" r="24"/><circle cx="1312" cy="410" r="16"/>
+      </g>
+    </svg>
+
+    <!-- Digital grid (ground HUD) -->
+    <div class="cb-grid" aria-hidden="true"></div>
+    <!-- Circuit traces -->
+    <svg class="cb-circuit" viewBox="0 0 1920 500" fill="none" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0 90 L220 90 L270 140 L520 140" class="cb-trace"/>
+      <path d="M0 180 L150 180 L200 230 L430 230" class="cb-trace"/>
+      <path d="M520 140 L560 100 L820 100" class="cb-trace"/>
+      <path d="M1920 120 L1720 120 L1670 170 L1460 170" class="cb-trace"/>
+      <path d="M1920 210 L1820 210 L1770 260 L1580 260" class="cb-trace"/>
+      <path d="M1460 170 L1420 210 L1220 210" class="cb-trace"/>
+      <circle cx="520" cy="140" r="6" class="cb-node"/><circle cx="430" cy="230" r="5" class="cb-node"/>
+      <circle cx="820" cy="100" r="4" class="cb-node"/><circle cx="1460" cy="170" r="6" class="cb-node"/>
+      <circle cx="1580" cy="260" r="4" class="cb-node"/><circle cx="1220" cy="210" r="5" class="cb-node"/>
+      <rect x="560" y="120" width="46" height="46" rx="8" class="cb-chip"/>
+      <rect x="1680" y="150" width="36" height="36" rx="6" class="cb-chip"/>
+      <circle cx="150" cy="330" r="42" class="cb-halo"/><circle cx="1770" cy="330" r="38" class="cb-halo"/>
+    </svg>
+    <!-- Hexagons -->
+    <div class="cb-hex hx1" aria-hidden="true"></div>
+    <div class="cb-hex hx2" aria-hidden="true"></div>
+    <!-- Neural network (top-left) -->
+    <svg class="cb-neural" viewBox="0 0 300 260" fill="none" aria-hidden="true">
+      <g class="cb-nn-group">
+        <line x1="20" y1="220" x2="90" y2="140"/><line x1="20" y1="220" x2="150" y2="210"/>
+        <line x1="90" y1="140" x2="150" y2="210"/><line x1="90" y1="140" x2="210" y2="80"/>
+        <line x1="150" y1="210" x2="210" y2="80"/><line x1="150" y1="210" x2="280" y2="150"/>
+        <line x1="210" y1="80" x2="280" y2="150"/>
+        <circle cx="20" cy="220" r="5" class="cb-nn"/><circle cx="90" cy="140" r="5" class="cb-nn"/>
+        <circle cx="150" cy="210" r="5" class="cb-nn"/><circle cx="210" cy="80" r="5" class="cb-nn"/>
+        <circle cx="280" cy="150" r="5" class="cb-nn"/>
+      </g>
+    </svg>
+    <!-- Digital globe (right) -->
+    <svg class="cb-globe" viewBox="0 0 120 120" aria-hidden="true">
+      <defs>
+        <radialGradient id="globeHalo" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#3f8cff" stop-opacity="0.45"/>
+          <stop offset="100%" stop-color="#3f8cff" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="globeSph" cx="0.35" cy="0.3" r="0.75">
+          <stop offset="0%" stop-color="#bfe0ff"/>
+          <stop offset="45%" stop-color="#3f7ef0"/>
+          <stop offset="100%" stop-color="#0d2a6e"/>
+        </radialGradient>
+      </defs>
+      <circle cx="60" cy="60" r="58" fill="url(#globeHalo)"/>
+      <g class="globe-float">
+        <g class="globe-spin">
+          <circle cx="60" cy="60" r="30" fill="url(#globeSph)" stroke="rgba(190,225,255,0.8)" stroke-width="1"/>
+          <ellipse cx="60" cy="60" rx="30" ry="10" fill="none" stroke="rgba(190,225,255,0.55)" stroke-width="1"/>
+          <ellipse cx="60" cy="60" rx="30" ry="22" fill="none" stroke="rgba(190,225,255,0.4)" stroke-width="1"/>
+          <ellipse cx="60" cy="60" rx="10" ry="30" fill="none" stroke="rgba(190,225,255,0.45)" stroke-width="1"/>
+          <ellipse cx="60" cy="60" rx="22" ry="30" fill="none" stroke="rgba(190,225,255,0.3)" stroke-width="1"/>
+        </g>
+        <ellipse cx="60" cy="60" rx="42" ry="12" fill="none" stroke="rgba(140,200,255,0.5)" stroke-width="1" stroke-dasharray="3 5" transform="rotate(-18 60 60)"/>
+        <circle cx="99" cy="44" r="2.6" fill="#bfe0ff" class="cb-orb"/><circle cx="22" cy="78" r="2" fill="#bfe0ff" class="cb-orb"/>
+        <circle cx="96" cy="76" r="1.8" fill="#ffd76b" class="cb-orb"/>
+      </g>
+    </svg>
+    <!-- Floating particles -->
+    <div class="cb-particles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <!-- Light streaks -->
+    <div class="cb-streaks" aria-hidden="true"><i></i><i></i><i></i></div>
+    <!-- HUD corner frames -->
+    <div class="cb-frame ftl"></div><div class="cb-frame ftr"></div><div class="cb-frame fbl"></div><div class="cb-frame fbr"></div>
+    <!-- Bottom blend + cinematic vignette -->
+    <div class="cb-vignette" aria-hidden="true"></div>
+
+    <!-- CIME branding — logo + college name (overlay, no touch to the scene) -->
+    <div class="cb-branding" aria-label="College of IT and Management Education, Bhubaneswar">
+      <div class="cb-brand-left">
+        <div class="cb-logo-2">
+          <span class="cb-logo-2-cime">C I M E</span>
+          <span class="cb-logo-2-city">BHUBANESWAR</span>
+        </div>
+        <div class="cb-motto">उद्यमेयं ही सिद्धीर्न्म</div>
+      </div>
+      <div class="cb-name-2">
+        <span class="cb-name-kicker">COLLEGE OF</span>
+        <span class="cb-name-main">IT &amp; MANAGEMENT EDUCATION</span>
+        <span class="cb-name-city"><i class="cb-dash"></i>BHUBANESWAR<i class="cb-dash"></i></span>
+      </div>
+    </div>
+
+    <!-- Accreditations — AICTE, Odisha Govt, Emblem of India (overlay) -->
+    <div class="cb-accred" aria-label="Accreditations">
+      <div class="cb-emblem-card">
+        <svg class="cb-emb2" viewBox="0 0 100 100" aria-hidden="true">
+          <g fill="#d97706">
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(0 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(45 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(90 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(135 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(180 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(225 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(270 50 50)"/>
+            <rect x="45" y="1" width="10" height="15" rx="2" transform="rotate(315 50 50)"/>
+          </g>
+          <circle cx="50" cy="50" r="34" fill="#ffd76b" stroke="#d97706" stroke-width="2"/>
+          <circle cx="50" cy="50" r="30" fill="#ffe8ad"/>
+          <text x="50" y="46" text-anchor="middle" font-size="13.5" font-weight="800" fill="#b91c1c" font-family="Arial, sans-serif">AICTE</text>
+          <text x="50" y="59" text-anchor="middle" font-size="6" font-weight="600" fill="#92400e" font-family="'Noto Sans Devanagari','Nirmala UI',sans-serif">योगः कर्मसु कौशलम्</text>
+          <circle cx="50" cy="72" r="9" fill="#1e3a8a"/>
+          <path d="M50 67 l2.6 3.4 -2.6 2.2 -2.6 -2.2 Z" fill="#ffd76b"/>
+          <path d="M50 72 v-4" stroke="#ffb648" stroke-width="1.4"/>
+        </svg>
+        <div class="cb-emb2-txt">Courses are recognized<br>by <b>AICTE, New Delhi</b></div>
+      </div>
+
+      <div class="cb-emblem-card">
+        <svg class="cb-emb2" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="47" fill="#eef4ff" stroke="#1d4ed8" stroke-width="3"/>
+          <circle cx="50" cy="50" r="30" fill="#1d4ed8"/>
+          <circle cx="50" cy="50" r="25" fill="#eef4ff"/>
+          <g stroke="#d97706" stroke-width="1.6">
+            <line x1="50" y1="27" x2="50" y2="73"/><line x1="27" y1="50" x2="73" y2="50"/>
+            <line x1="34" y1="34" x2="66" y2="66"/><line x1="66" y1="34" x2="34" y2="66"/>
+            <line x1="30" y1="42" x2="70" y2="58"/><line x1="70" y1="42" x2="30" y2="58"/>
+            <line x1="42" y1="30" x2="58" y2="70"/><line x1="58" y1="30" x2="42" y2="70"/>
+          </g>
+          <circle cx="50" cy="50" r="15" fill="none" stroke="#d97706" stroke-width="1.8"/>
+          <path d="M50 39 a11 11 0 1 1 -0.01 0 Z" fill="#1d4ed8"/>
+          <circle cx="50" cy="50" r="3" fill="#fbbf24"/>
+          <rect x="23" y="74" width="54" height="9" fill="#1d4ed8"/>
+          <text x="50" y="81" text-anchor="middle" font-size="7" font-weight="800" fill="#fff" font-family="Arial, sans-serif">ODISHA</text>
+        </svg>
+      </div>
+
+      <div class="cb-emblem-card">
+        <svg class="cb-emb2" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="47" fill="#eef4ff" stroke="#1d4ed8" stroke-width="3"/>
+          <g fill="#1d4ed8">
+            <ellipse cx="38" cy="37" rx="7" ry="9"/>
+            <ellipse cx="50" cy="35" rx="8" ry="10"/>
+            <ellipse cx="62" cy="37" rx="7" ry="9"/>
+            <rect x="31" y="43" width="14" height="6" rx="3"/>
+            <rect x="43" y="43" width="14" height="6" rx="3"/>
+            <rect x="55" y="43" width="14" height="6" rx="3"/>
+            <rect x="30" y="49" width="40" height="3"/>
+            <circle cx="50" cy="61" r="8" fill="none" stroke="#1d4ed8" stroke-width="1.6"/>
+            <line x1="50" y1="53" x2="50" y2="69" stroke="#1d4ed8" stroke-width="0.8"/>
+            <line x1="42" y1="61" x2="58" y2="61" stroke="#1d4ed8" stroke-width="0.8"/>
+            <line x1="44.3" y1="55.3" x2="55.7" y2="66.7" stroke="#1d4ed8" stroke-width="0.8"/>
+            <line x1="55.7" y1="55.3" x2="44.3" y2="66.7" stroke="#1d4ed8" stroke-width="0.8"/>
+            <path d="M34 71 h32 l-3 8 h-26 Z" fill="#1d4ed8"/>
+            <path d="M40 71 q-4 -5 0 -5 q4 0 0 5 Z" fill="#fff" opacity="0.9"/>
+            <path d="M52 71 q5 -4 9 -4 q-1 4 -5 4 Z" fill="#fff" opacity="0.9"/>
+          </g>
+          <text x="50" y="90" text-anchor="middle" font-size="6" font-weight="700" fill="#1d4ed8" font-family="'Noto Sans Devanagari','Nirmala UI',sans-serif">सत्यमेव जयते</text>
+        </svg>
+      </div>
+    </div>
+  </header>
+
+  <!-- LOGIN STAGE: login card below the banner -->
+  <main class="login-stage">
+    <div class="card login-card">
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="signin" onclick="switchAuthTab('signin')">Sign In</button>
+      <button class="auth-tab" data-tab="signup" onclick="switchAuthTab('signup')">Create Account</button>
+    </div>
     <div class="brand" style="justify-content:center; padding-bottom: 20px;">
       <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5-10-5Z"/><path d="M6 12v5c0 1.5 2.5 3 6 3s6-1.5 6-3v-5"/></svg></div>
       <div>
@@ -30,26 +409,98 @@
         <div class="brand-sub">CIME Portal</div>
       </div>
     </div>
-    <form id="loginForm" onsubmit="handleLogin(event)">
-      <div class="form-grid" style="grid-template-columns: 1fr;">
-        <div class="form-field full">
-          <label>Email Address</label>
-          <input type="email" id="loginEmail" placeholder="admin@cime.edu" required value="admin@cime.edu">
+
+    <!-- SIGN IN -->
+    <div id="loginFormWrap">
+      <form id="loginForm" onsubmit="handleLogin(event)">
+        <div class="form-grid" style="grid-template-columns: 1fr;">
+          <div class="form-field full">
+            <label>Email Address</label>
+            <input type="email" id="loginEmail" placeholder="admin@cime.edu" required value="admin@cime.edu">
+          </div>
+          <div class="form-field full">
+            <label>Password</label>
+            <div class="pw-wrap">
+              <input type="password" id="loginPass" placeholder="••••••••" required value="password">
+              <button type="button" class="pw-toggle" onclick="togglePassword('loginPass', this)" aria-label="Show password" title="Show/hide password">
+                <svg class="pw-eye-open" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="pw-eye-off" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
-        <div class="form-field full">
-          <label>Password</label>
-          <input type="password" id="loginPass" placeholder="••••••••" required value="password">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin: 16px 0;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--ink-soft); cursor:pointer;">
+            <input type="checkbox" id="rememberMe"> Remember Me
+          </label>
+          <a href="#" onclick="openForgotModal()" style="font-size:13px; color:var(--violet); text-decoration:none; font-weight:600;">Forgot Password?</a>
+        </div>
+        <button type="submit" id="loginSubmitBtn" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:20px;">Login to ERP</button>
+      </form>
+      <!-- Shown when a verified-email account tries to sign in without verifying first -->
+      <div id="verifyNotice" class="verify-notice" style="display:none;">
+        <div class="verify-notice-title">Check your email 📬</div>
+        <div class="verify-notice-text">We sent a <b>verification link</b> to <b id="verifyNoticeEmail"></b>. Didn't receive it?</div>
+        <div class="verify-notice-row">
+          <input type="email" id="verifyNoticeEmailInput" placeholder="you@example.com">
+          <button type="button" class="btn btn-primary btn-sm" onclick="resendVerificationLink()">Resend Link</button>
         </div>
       </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin: 16px 0;">
-        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--ink-soft); cursor:pointer;">
-          <input type="checkbox" id="rememberMe"> Remember Me
-        </label>
-        <a href="#" style="font-size:13px; color:var(--violet); text-decoration:none; font-weight:600;">Forgot Password?</a>
+    </div>
+
+    <!-- CREATE ACCOUNT -->
+    <div id="signupFormWrap" style="display:none;">
+      <form id="signupForm" onsubmit="handleSignup(event)">
+        <div class="form-grid" style="grid-template-columns: 1fr;">
+          <div class="form-field full">
+            <label>Full Name</label>
+            <input type="text" id="su_name" placeholder="e.g. Priya Nair" required>
+            <div class="field-error" id="su_name_error" style="display:none;">Please enter your full name.</div>
+          </div>
+          <div class="form-field full">
+            <label>Email Address</label>
+            <input type="email" id="su_email" placeholder="you@example.com" required>
+            <div class="field-error" id="su_email_error" style="display:none;">Please enter a valid email address.</div>
+          </div>
+          <div class="form-field full">
+            <label>Password</label>
+            <div class="pw-wrap">
+              <input type="password" id="su_password" placeholder="Minimum 6 characters" required>
+              <button type="button" class="pw-toggle" onclick="togglePassword('su_password', this)" aria-label="Show password" title="Show/hide password">
+                <svg class="pw-eye-open" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="pw-eye-off" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+            <div class="pw-meter" id="su_pw_meter" style="display:none;"><span id="su_pw_bar"></span></div>
+            <div class="field-error" id="su_pw_error" style="display:none;">Password must be at least 6 characters.</div>
+          </div>
+          <div class="form-field full">
+            <label>Confirm Password</label>
+            <div class="pw-wrap">
+              <input type="password" id="su_confirm" placeholder="Repeat password" required>
+              <button type="button" class="pw-toggle" onclick="togglePassword('su_confirm', this)" aria-label="Show password" title="Show/hide password">
+                <svg class="pw-eye-open" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="pw-eye-off" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+            <div class="field-error" id="su_cf_error" style="display:none;">Passwords do not match.</div>
+          </div>
+        </div>
+        <button type="submit" id="signupSubmitBtn" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:20px;">Create Account</button>
+        <p style="font-size:12.5px;color:var(--ink-faint);text-align:center;margin-top:14px;">New accounts get <b>User</b> access (attendance only). A <b>verification email</b> is required before you can sign in.</p>
+      </form>
+      <!-- Success state: shown after the account is created and the verification email is sent -->
+      <div id="signupSuccess" class="signup-success" style="display:none;">
+        <div class="signup-success-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+        <h3>Almost there! ✉️</h3>
+        <p>We've sent a <b>verification link</b> to<br><b id="signupSuccessEmail"></b><br>Click it to activate your account (valid 24 hours), then sign in below.</p>
+        <button class="btn btn-primary" onclick="switchAuthTab('signin')">Back to Sign In</button>
       </div>
-      <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:20px;">Login to ERP</button>
-    </form>
-  </div>
+    </div>
+    </div>
+  </main>
 </div>
 
 <div class="app" id="mainApp" style="display:none;">
@@ -89,16 +540,18 @@
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-4"/></svg>
       Reports
     </button>
-    <button class="nav-item admin-only" data-view="settings">
+    <button class="nav-item admin-only" data-view="users">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Users
+    </button>
+    <button class="nav-item" data-view="settings">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
       Settings
-    </button>
-
-    <div class="sidebar-footer">
+    </button>      <div class="sidebar-footer">
       <div class="row">
-        <div class="mini-avatar">FN</div>
+        <div class="mini-avatar" id="userAvatarInitials">FN</div>
         <div>
-          <div class="name" id="userNameDisplay">Firoj Naik</div>
+          <div class="name" id="userNameDisplay">Loading…</div>
           <div class="role" id="displayRole">Administrator</div>
         </div>
         <button class="icon-btn-sm" title="Logout" onclick="handleLogout()" style="margin-left:auto;">
@@ -120,13 +573,17 @@
       </div>
       <div class="topbar-spacer"></div>
       
-      <!-- Theme Toggle -->
-      <button class="icon-btn" id="themeToggleBtn" title="Toggle Theme">
-        <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-      </button>
+      <!-- Theme Picker -->
+      <div class="theme-menu-wrap">
+        <button class="icon-btn" id="themeToggleBtn" title="Theme">
+          <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+        </button>
+        <div class="theme-menu" id="themeMenu"></div>
+      </div>
 
       <button class="icon-btn" title="Notifications"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="dot-badge"></span></button>
-      <div class="topbar-avatar">FN</div>
+      <div class="topbar-avatar" id="topbarAvatar" title="Your account">FN</div>
     </div>
 
     <!-- DASHBOARD VIEW -->
@@ -203,6 +660,13 @@
           <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
           <p>No students match your filters.</p>
         </div>
+        <div class="pagination-bar">
+          <span class="pagination-info" id="studentsPageInfo"></span>
+          <div class="pagination-controls">
+            <button class="btn btn-ghost btn-sm" id="studentsPrevBtn" onclick="studentsPrev()">← Prev</button>
+            <button class="btn btn-ghost btn-sm" id="studentsNextBtn" onclick="studentsNext()">Next →</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -219,6 +683,10 @@
         <select class="filter-select" id="attDeptFilter"><option value="">Select Department</option></select>
         <select class="filter-select" id="attSemFilter"><option value="">Select Semester</option></select>
         <div class="toolbar-spacer"></div>
+        <button class="btn btn-ghost btn-sm admin-only" onclick="downloadAttendanceSheet()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Print Sheet
+        </button>
         <button class="btn btn-primary btn-sm" onclick="saveAttendance()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
           Save Attendance
@@ -267,6 +735,16 @@
     <section class="view admin-only" id="view-reports">
       <div class="page-head">
         <div><h1>Reports</h1><p>Department-level snapshot of performance and attendance.</p></div>
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-ghost btn-sm" onclick="exportReport('csv')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export CSV
+          </button>
+          <button class="btn btn-primary btn-sm" onclick="exportReport('pdf')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export PDF
+          </button>
+        </div>
       </div>
       
       <h3 class="card-title" style="margin:20px 0 10px;">MCA Report</h3>
@@ -280,19 +758,70 @@
       </div>
     </section>
 
-    <!-- SETTINGS VIEW -->
-    <section class="view admin-only" id="view-settings">
+    <!-- USERS VIEW -->
+    <section class="view admin-only" id="view-users">
       <div class="page-head">
-        <div><h1>Settings</h1><p>Institution preferences.</p></div>
+        <div><h1>Users</h1><p>Manage accounts that can access the ERP.</p></div>
+        <button class="btn btn-primary" onclick="openUserModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Add User
+        </button>
       </div>
-      <div class="card" style="max-width:520px;">
-        <div class="form-grid">
-          <div class="form-field full"><label>Institution Name</label><input type="text" value="College of IT and Management Education (CIME)"></div>
-          <div class="form-field"><label>Academic Year</label><input type="text" value="2026 – 2027"></div>
-          <div class="form-field"><label>Time Zone</label><input type="text" value="Asia/Kolkata"></div>
-          <div class="form-field full"><label>Contact Email</label><input type="email" value="admin@cime.edu"></div>
+      <div class="card">
+        <div class="table-wrap">
+          <table class="grade-table">
+            <thead><tr><th>Email</th><th>Role</th><th>Created</th><th></th></tr></thead>
+            <tbody id="usersListBody"></tbody>
+          </table>
         </div>
-        <div class="modal-actions"><button class="btn btn-primary">Save Changes</button></div>
+      </div>
+      <h3 class="card-title" style="margin:22px 0 10px;">Recent Activity</h3>
+      <div class="card">
+        <div class="row-list" id="auditList">
+          <div class="empty-state"><p>Loading activity…</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS VIEW -->
+    <section class="view" id="view-settings">
+      <div class="page-head">
+        <div><h1>Settings</h1><p>Account and institution preferences.</p></div>
+      </div>
+      <div class="settings-grid">
+        <div class="card">
+          <h3 class="card-title">Edit Profile</h3>
+          <p class="card-sub" style="margin-top:-4px;">Your name shows in the sidebar and to other users.</p>
+          <div class="form-grid" style="grid-template-columns:1fr;">
+            <div class="form-field full"><label>Full Name</label><input type="text" id="profile_name" placeholder="Your full name"></div>
+            <div class="form-field full"><label>Email (sign-in)</label><input type="email" id="profile_email" disabled></div>
+          </div>
+          <div class="modal-actions"><button class="btn btn-primary" onclick="updateProfileName()">Update Profile</button></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Change Password</h3>
+          <p class="card-sub" style="margin-top:-4px;">Update the password you use to sign in.</p>
+          <div class="form-grid" style="grid-template-columns:1fr;">
+            <div class="form-field full"><label>Current Password</label><input type="password" id="cp_current" placeholder="Your current password"></div>
+            <div class="form-field full"><label>New Password</label><input type="password" id="cp_new" placeholder="Minimum 6 characters"></div>
+            <div class="form-field full"><label>Confirm New Password</label><input type="password" id="cp_confirm" placeholder="Repeat the new password"></div>
+          </div>
+          <div class="modal-actions"><button class="btn btn-primary" onclick="changePassword()">Update Password</button></div>
+        </div>
+        <div class="card admin-only">
+          <h3 class="card-title">Institution</h3>
+          <p class="card-sub" style="margin-top:-4px;">Details used on reports and printed documents.</p>
+          <div class="form-grid">
+            <div class="form-field full"><label>Institution Name</label><textarea id="inst_name" rows="1" placeholder="e.g. College of IT and Management Education (CIME)" oninput="autoGrowTextarea(this)"></textarea></div>
+            <div class="form-field"><label>Academic Year</label><input type="text" id="inst_year" placeholder="e.g. 2026 – 2027"></div>
+            <div class="form-field"><label>Time Zone</label><input type="text" id="inst_tz" placeholder="e.g. Asia/Kolkata"></div>
+            <div class="form-field full"><label>Contact Email</label><input type="email" id="inst_email" placeholder="e.g. admin@cime.edu"></div>
+          </div>
+          <div class="modal-actions" style="justify-content:space-between;">
+            <button class="btn btn-ghost" onclick="resetInstitution()">Reset</button>
+            <button class="btn btn-primary" onclick="saveInstitution()">Save Changes</button>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -310,7 +839,7 @@
         <div class="form-grid">
           <div class="form-field full"><label>Full Name</label><input type="text" id="f_name" required placeholder="e.g. Ananya Sharma"></div>
           <div class="form-field full"><label>Email Address</label><input type="email" id="f_email" required placeholder="student@school.edu"></div>
-          <div class="form-field"><label>Phone</label><input type="text" id="f_phone" placeholder="+91 98765 43210"></div>
+          <div class="form-field"><label>Phone</label><input type="text" id="f_phone" placeholder="+91 98765 43210" inputmode="tel" autocomplete="tel" oninput="sanitizePhone(this)"><div class="field-error" id="f_phone_error" style="display:none;">Enter a valid 10-digit phone number (e.g. 98765 43210, optional +91).</div></div>
           <div class="form-field"><label>Gender</label>
             <select id="f_gender"><option>Female</option><option>Male</option><option>Other</option></select>
           </div>
@@ -355,6 +884,107 @@
   </div>
 </div>
 
+<!-- FORGOT PASSWORD MODAL -->
+<div class="modal-backdrop" id="forgotModalBackdrop">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <h3>Reset Your Password</h3>
+      <button class="modal-close" onclick="closeForgotModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="card-sub" style="margin-bottom:14px;">Enter your account email and we'll send you a one-time reset link (valid for 30 minutes).</p>
+      <div class="form-grid" style="grid-template-columns:1fr;">
+        <div class="form-field full"><label>Email Address</label><input type="email" id="fg_email" placeholder="you@cime.edu"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeForgotModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitForgot()">Send Reset Link</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SET NEW PASSWORD MODAL (opened from the emailed reset link) -->
+<div class="modal-backdrop" id="passwordResetModalBackdrop">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <h3>Set a New Password</h3>
+      <button class="modal-close" onclick="closePasswordResetModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="card-sub" style="margin-bottom:14px;">Choose a new password for your account.</p>
+      <input type="hidden" id="pr_token">
+      <div class="form-grid" style="grid-template-columns:1fr;">
+        <div class="form-field full"><label>New Password</label><input type="password" id="pr_password" placeholder="Minimum 6 characters"></div>
+        <div class="form-field full"><label>Confirm New Password</label><input type="password" id="pr_confirm" placeholder="Repeat the new password"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closePasswordResetModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitPasswordReset()">Set New Password</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EMAIL VERIFIED MODAL (shown after clicking the emailed ?verify= link) -->
+<div class="modal-backdrop" id="verifySuccessModalBackdrop">
+  <div class="modal" style="max-width:400px;">
+    <div class="modal-body" style="padding-top:26px;text-align:center;">
+      <div style="width:56px;height:56px;border-radius:16px;background:var(--grad-mint);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <h3 style="margin:0 0 6px;">Email verified! 🎉</h3>
+      <p style="color:var(--ink-soft);font-size:13.5px;margin:0 0 20px;" id="verifyEmailText">Your account is now active. Sign in to continue.</p>
+      <div class="modal-actions" style="justify-content:center;">
+        <button class="btn btn-primary" onclick="closeVerifyModalAndSignIn()">Continue to Sign In</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RESET PASSWORD MODAL (admin, from the Users page) -->
+<div class="modal-backdrop" id="resetPasswordBackdrop">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <h3>Reset Password</h3>
+      <button class="modal-close" onclick="closeResetPasswordModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="card-sub" style="margin-bottom:14px;">Set a new password for <strong id="resetUserEmail" style="color:var(--ink);"></strong>.</p>
+      <div class="form-grid" style="grid-template-columns:1fr;">
+        <div class="form-field full"><label>New Password</label><input type="password" id="rp_password" placeholder="Minimum 6 characters"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeResetPasswordModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitResetPassword()">Reset Password</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADD USER MODAL -->
+<div class="modal-backdrop" id="userModalBackdrop">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-head">
+      <h3>Add User</h3>
+      <button class="modal-close" onclick="closeUserModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="grid-template-columns:1fr;">
+        <div class="form-field full"><label>Email Address</label><input type="email" id="u_email" placeholder="teacher@cime.edu"></div>
+        <div class="form-field full"><label>Password</label><input type="password" id="u_password" placeholder="Minimum 6 characters"></div>
+        <div class="form-field full"><label>Role</label>
+          <select id="u_role"><option value="user">User (attendance only)</option><option value="admin">Admin (full access)</option></select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeUserModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitUserForm()">Create User</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- STUDENT DETAIL DRAWER -->
 <div class="drawer-backdrop" id="drawerBackdrop" onclick="closeDrawer()"></div>
 <div class="drawer" id="studentDrawer">
@@ -373,6 +1003,9 @@
 
 <div class="toast-wrap" id="toastWrap"></div>
 
+<script>
+  window.COHORT_CONFIG = { apiUrl: 'http://localhost:5000/api' };
+</script>
 <script src="script.js"></script>
 </body>
 </html>
