@@ -1,7 +1,7 @@
 /* ============================================================
    DATA MODEL & CONFIG
 ============================================================ */
-const API_URL = (window.COHORT_CONFIG && window.COHORT_CONFIG.apiUrl) || 'http://localhost:5000/api';
+const API_URL = (window.COHORT_CONFIG && window.COHORT_CONFIG.apiUrl) || 'https://cime-backend.onrender.com/api';
 const SUBJECTS = ['Database Systems', 'Java Programming', 'Data Structures', 'Web Development', 'Computer Networks'];
 const DEPARTMENTS = ['MCA', 'MBA'];
 const SEMESTERS = ['Semester 1', 'Semester 2', 'Semester 3', 'Semester 4', 'Semester 5', 'Semester 6'];
