@@ -9,9 +9,16 @@ const apiRoutes = require('./routes/api');
 
 const app = express();
 
-// Behind a reverse proxy? Set TRUST_PROXY=1 in .env so the rate limiters
-// (login, admin mutations) see the real client IP instead of the proxy's.
-if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
+// Reverse proxy configuration:
+// In cloud environments such as Render (which sets RENDER=true) or behind nginx/Caddy (TRUST_PROXY=1),
+// trust the 1st upstream proxy hop so Express rate limiters see the genuine client IP (X-Forwarded-For)
+// rather than pooling all users into the shared load-balancer IP.
+const isTrustProxy = (
+    process.env.TRUST_PROXY === '1' ||
+    process.env.TRUST_PROXY === 'true' ||
+    process.env.RENDER === 'true'
+);
+if (isTrustProxy) {
     app.set('trust proxy', 1);
 }
 
@@ -28,9 +35,37 @@ app.use(helmet({
         }
     }
 }));
-// Restrict CORS origins via CORS_ORIGIN (comma-separated) when set; otherwise allow all (local dev)
-const corsOrigin = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true;
-app.use(cors({ origin: corsOrigin }));
+/**
+ * Resolves the allowed CORS origins.
+ * - Parses comma-separated CORS_ORIGIN values, trims whitespace, and removes empty tokens.
+ * - In production: enforces an exact origin allowlist (defaults safely to CIME Vercel frontend if missing).
+ * - In development/test: falls back to allowing all origins (true) for local developer workflows.
+ */
+function resolveCorsOrigin(envOrigin = process.env.CORS_ORIGIN, nodeEnv = process.env.NODE_ENV) {
+    if (typeof envOrigin === 'string' && envOrigin.trim().length > 0) {
+        const parsed = envOrigin
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+        if (parsed.length > 0) {
+            return parsed;
+        }
+    }
+    if (nodeEnv === 'production') {
+        // Production fallback: strictly restrict to official CIME Vercel production deployment
+        return ['https://cime-erp.vercel.app'];
+    }
+    // Local development & test default
+    return true;
+}
+
+const corsOrigin = resolveCorsOrigin();
+app.use(cors({
+    origin: corsOrigin,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: false
+}));
 app.use(express.json());
 app.use(morgan('dev'));
 
@@ -68,3 +103,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+module.exports.resolveCorsOrigin = resolveCorsOrigin;

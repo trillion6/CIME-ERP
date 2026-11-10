@@ -1749,3 +1749,335 @@ test('frontend: dynamic API URL resolves localhost to 5000 and remote to Render'
     assert.strictEqual(resolveApiUrl('cime-erp.vercel.app'), 'https://cime-backend.onrender.com/api');
     assert.strictEqual(resolveApiUrl('cime.edu'), 'https://cime-backend.onrender.com/api');
 });
+
+/* --------------------- PHASE 2B HARDENING TESTS ---------------------- */
+test('cors: origin resolution trims whitespace, eliminates empty tokens, and enforces safe production fallback', () => {
+    const { resolveCorsOrigin } = app;
+    assert.strictEqual(typeof resolveCorsOrigin, 'function');
+
+    // 1. Whitespace and empty token trimming
+    const custom = resolveCorsOrigin('https://cime-erp.vercel.app,  https://cime.edu , ,  https://staging.cime.edu  ', 'production');
+    assert.deepStrictEqual(custom, ['https://cime-erp.vercel.app', 'https://cime.edu', 'https://staging.cime.edu']);
+
+    // 2. Production fallback with missing or empty CORS_ORIGIN
+    const prodMissing = resolveCorsOrigin(undefined, 'production');
+    assert.deepStrictEqual(prodMissing, ['https://cime-erp.vercel.app']);
+    const prodEmpty = resolveCorsOrigin('   ', 'production');
+    assert.deepStrictEqual(prodEmpty, ['https://cime-erp.vercel.app']);
+
+    // 3. Local development / test fallback
+    const devMissing = resolveCorsOrigin(undefined, 'development');
+    assert.strictEqual(devMissing, true);
+});
+
+test('cors: production middleware enforces exact origin allowlist and handles preflight OPTIONS', async () => {
+    const express = require('express');
+    const cors = require('cors');
+    const testApp = express();
+    const prodOrigins = app.resolveCorsOrigin('', 'production'); // ['https://cime-erp.vercel.app']
+    testApp.use(cors({
+        origin: prodOrigins,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization']
+    }));
+    testApp.get('/test-cors', (req, res) => res.json({ ok: true }));
+
+    const srv = testApp.listen(0);
+    const port = srv.address().port;
+    const testUrl = `http://127.0.0.1:${port}/test-cors`;
+
+    try {
+        // 1. Authorized origin receives matching Access-Control-Allow-Origin
+        const resAuth = await fetch(testUrl, {
+            headers: { Origin: 'https://cime-erp.vercel.app' }
+        });
+        assert.strictEqual(resAuth.status, 200);
+        assert.strictEqual(resAuth.headers.get('access-control-allow-origin'), 'https://cime-erp.vercel.app');
+
+        // 2. Unauthorized origin receives NO Access-Control-Allow-Origin
+        const resUnauth = await fetch(testUrl, {
+            headers: { Origin: 'https://unauthorized-attacker.com' }
+        });
+        assert.strictEqual(resUnauth.status, 200);
+        assert.strictEqual(resUnauth.headers.get('access-control-allow-origin'), null);
+
+        // 3. Preflight OPTIONS from authorized origin
+        const resPreflightAuth = await fetch(testUrl, {
+            method: 'OPTIONS',
+            headers: {
+                Origin: 'https://cime-erp.vercel.app',
+                'Access-Control-Request-Method': 'GET',
+                'Access-Control-Request-Headers': 'Content-Type, Authorization'
+            }
+        });
+        assert.ok([200, 204].includes(resPreflightAuth.status));
+        assert.strictEqual(resPreflightAuth.headers.get('access-control-allow-origin'), 'https://cime-erp.vercel.app');
+
+        // 4. Preflight OPTIONS from unauthorized origin
+        const resPreflightUnauth = await fetch(testUrl, {
+            method: 'OPTIONS',
+            headers: {
+                Origin: 'https://unauthorized-attacker.com',
+                'Access-Control-Request-Method': 'GET'
+            }
+        });
+        assert.strictEqual(resPreflightUnauth.headers.get('access-control-allow-origin'), null);
+    } finally {
+        await new Promise(r => srv.close(r));
+    }
+});
+
+test('proxy: trust proxy configuration recognizes Render and TRUST_PROXY', async () => {
+    const express = require('express');
+    const proxyApp = express();
+
+    // Replicate the server.js trust proxy detection logic
+    function configureTrustProxy(appInstance, env) {
+        const isTrustProxy = (
+            env.TRUST_PROXY === '1' ||
+            env.TRUST_PROXY === 'true' ||
+            env.RENDER === 'true'
+        );
+        if (isTrustProxy) {
+            appInstance.set('trust proxy', 1);
+        }
+        return isTrustProxy;
+    }
+
+    assert.strictEqual(configureTrustProxy(proxyApp, { RENDER: 'true' }), true);
+    assert.strictEqual(proxyApp.get('trust proxy'), 1);
+
+    const devApp = express();
+    assert.strictEqual(configureTrustProxy(devApp, {}), false);
+    assert.strictEqual(devApp.get('trust proxy'), false);
+
+    // Verify req.ip resolution with trust proxy: 1
+    proxyApp.get('/test-ip', (req, res) => res.json({ ip: req.ip }));
+    const srv = proxyApp.listen(0);
+    const port = srv.address().port;
+
+    try {
+        // Render forwards the client IP in X-Forwarded-For: '203.0.113.195'.
+        // With trust proxy: 1, Express trusts the immediate socket peer (Render proxy) and extracts 203.0.113.195.
+        const resSingle = await fetch(`http://127.0.0.1:${port}/test-ip`, {
+            headers: { 'X-Forwarded-For': '203.0.113.195' }
+        });
+        const bodySingle = await resSingle.json();
+        assert.strictEqual(bodySingle.ip, '203.0.113.195');
+
+        // Security check: client-supplied spoofed chains ('spoofed-ip, 203.0.113.195')
+        // Express only trusts 1 hop, so it extracts the rightmost client IP (203.0.113.195) rather than the spoofed prefix.
+        const resSpoofed = await fetch(`http://127.0.0.1:${port}/test-ip`, {
+            headers: { 'X-Forwarded-For': '198.51.100.22, 203.0.113.195' }
+        });
+        const bodySpoofed = await resSpoofed.json();
+        assert.strictEqual(bodySpoofed.ip, '203.0.113.195');
+    } finally {
+        await new Promise(r => srv.close(r));
+    }
+});
+
+test('mailer: production mode suppresses token logging and reports honest failure when SMTP is missing', async () => {
+    const oldNodeEnv = process.env.NODE_ENV;
+    const oldSmtpHost = process.env.SMTP_HOST;
+    const oldSmtpUser = process.env.SMTP_USER;
+    const oldSmtpPass = process.env.SMTP_PASS;
+
+    // Simulate production environment with NO SMTP credentials
+    delete process.env.SMTP_HOST;
+    delete process.env.SMTP_USER;
+    delete process.env.SMTP_PASS;
+    process.env.NODE_ENV = 'production';
+    mailer._forceRealDelivery = true;
+
+    const loggedOutput = [];
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+
+    console.log = (...args) => loggedOutput.push(args.join(' '));
+    console.warn = (...args) => loggedOutput.push(args.join(' '));
+    console.error = (...args) => loggedOutput.push(args.join(' '));
+
+    try {
+        const secretToken = 'super-secret-token-xyz-12345';
+        const resetLink = `https://cime-backend.onrender.com/?reset=${secretToken}`;
+
+        const result = await mailer.sendPasswordResetEmail({
+            to: 'student@cime.edu',
+            resetLink
+        });
+
+        // 1. Returns honest delivery failure
+        assert.strictEqual(result.delivered, false);
+        assert.strictEqual(result.error, 'SMTP is not configured');
+
+        // 2. Sensitive token or link is NEVER printed to stdout/logs in production
+        const combinedLogs = loggedOutput.join('\n');
+        assert.strictEqual(combinedLogs.includes(secretToken), false, 'Security violation: secret token logged to stdout in production');
+        assert.strictEqual(combinedLogs.includes('reset='), false, 'Security violation: reset URL logged to stdout in production');
+    } finally {
+        console.log = origLog;
+        console.warn = origWarn;
+        console.error = origError;
+        process.env.NODE_ENV = oldNodeEnv;
+        if (oldSmtpHost) process.env.SMTP_HOST = oldSmtpHost;
+        if (oldSmtpUser) process.env.SMTP_USER = oldSmtpUser;
+        if (oldSmtpPass) process.env.SMTP_PASS = oldSmtpPass;
+        mailer._forceRealDelivery = false;
+    }
+});
+
+test('mailer: email templates and subjects use official CIME CMS branding', async () => {
+    mailer.lastResetLink = null;
+    mailer.lastVerificationLink = null;
+
+    // Capture deliver arguments
+    let capturedVerification = null;
+    let capturedWelcome = null;
+    let capturedReset = null;
+
+    const origDeliver = mailer._deliver;
+    mailer._deliver = async (params) => {
+        if (params.subject.includes('Verify')) capturedVerification = params;
+        else if (params.subject.includes('Welcome')) capturedWelcome = params;
+        else if (params.subject.includes('Reset')) capturedReset = params;
+        return { delivered: true };
+    };
+
+    try {
+        await mailer.sendVerificationEmail({ to: 'user@cime.edu', verifyLink: 'http://test/verify' });
+        assert.ok(capturedVerification);
+        assert.strictEqual(capturedVerification.subject, 'CIME CMS — Verify your email');
+        assert.ok(capturedVerification.text.includes('CIME CMS'));
+        assert.ok(!capturedVerification.text.includes('Cohort ERP'));
+
+        await mailer.sendWelcomeEmail({ to: 'user@cime.edu', name: 'Alok' });
+        assert.ok(capturedWelcome);
+        assert.strictEqual(capturedWelcome.subject, 'Welcome to CIME CMS 🎓');
+        assert.ok(capturedWelcome.text.includes('CIME CMS'));
+        assert.ok(!capturedWelcome.text.includes('Cohort ERP'));
+
+        await mailer.sendPasswordResetEmail({ to: 'user@cime.edu', resetLink: 'http://test/reset' });
+        assert.ok(capturedReset);
+        assert.strictEqual(capturedReset.subject, 'CIME CMS — Reset your password');
+        assert.ok(capturedReset.text.includes('CIME CMS'));
+        assert.ok(!capturedReset.text.includes('Cohort ERP'));
+    } finally {
+        mailer._deliver = origDeliver;
+    }
+});
+
+test('frontend: apiCall implementation handles 401 login, session expiration, HTML 502/504 and network errors', async () => {
+    // Exact replica of frontend/script.js apiCall logic with injected mock fetch and environment
+    async function testApiCall(endpoint, method = 'GET', body = null, mockFetch, stateMock, windowMock) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (stateMock.token) headers['Authorization'] = `Bearer ${stateMock.token}`;
+        const options = { method, headers };
+        if (body) options.body = JSON.stringify(body);
+
+        let response;
+        try {
+            response = await mockFetch(`https://api.test${endpoint}`, options);
+        } catch (netErr) {
+            throw new Error('Unable to connect to server. Please check your network connection.');
+        }
+
+        let data = null;
+        let rawText = '';
+        try {
+            rawText = await response.text();
+            if (rawText && rawText.trim().length > 0) {
+                data = JSON.parse(rawText);
+            }
+        } catch (_) {
+            data = null;
+        }
+
+        if (response.status === 401) {
+            const isLoginAttempt = endpoint === '/auth/login' || endpoint.startsWith('/auth/login?');
+            if (!isLoginAttempt) {
+                windowMock.localStorage.removeItem('token');
+                windowMock.sessionStorage.removeItem('token');
+                stateMock.token = null;
+                windowMock.location.reload();
+                return;
+            }
+        }
+
+        if (!response.ok) {
+            let errorMsg = (data && (data.error || data.message));
+            if (!errorMsg) {
+                if (response.status === 502 || response.status === 503 || response.status === 504) {
+                    errorMsg = `Server is temporarily unavailable (HTTP ${response.status}). Please try again in a few moments.`;
+                } else if (rawText && rawText.trim().length > 0 && rawText.length < 150 && !rawText.trim().startsWith('<')) {
+                    errorMsg = rawText.trim();
+                } else {
+                    errorMsg = `Request failed with status ${response.status}`;
+                }
+            }
+            throw new Error(errorMsg);
+        }
+        return data !== null ? data : {};
+    }
+
+    const state = { token: 'existing-jwt-token' };
+    let reloaded = false;
+    const windowMock = {
+        localStorage: { removeItem: () => {} },
+        sessionStorage: { removeItem: () => {} },
+        location: { reload: () => { reloaded = true; } }
+    };
+
+    // 1. Invalid login (401 on /auth/login) must NOT reload and must throw the server error
+    reloaded = false;
+    const mockLogin401 = async () => ({
+        status: 401,
+        ok: false,
+        text: async () => JSON.stringify({ error: 'Invalid credentials' })
+    });
+    await assert.rejects(
+        async () => await testApiCall('/auth/login', 'POST', { email: 'a@b.com', password: 'wrong' }, mockLogin401, state, windowMock),
+        /Invalid credentials/
+    );
+    assert.strictEqual(reloaded, false, 'Invalid login credentials must NOT trigger location.reload()');
+
+    // 2. Authenticated 401 (e.g. /students) must trigger session cleanup and location.reload()
+    reloaded = false;
+    const mockStudents401 = async () => ({
+        status: 401,
+        ok: false,
+        text: async () => JSON.stringify({ error: 'Not authorized, token failed' })
+    });
+    const authResult = await testApiCall('/students', 'GET', null, mockStudents401, state, windowMock);
+    assert.strictEqual(reloaded, true, 'Authenticated 401 must trigger location.reload()');
+    assert.strictEqual(state.token, null, 'Authenticated 401 must clear state token');
+    assert.strictEqual(authResult, undefined);
+
+    // 3. HTML 502 Bad Gateway response does NOT crash JSON parser and throws friendly message
+    const mock502 = async () => ({
+        status: 502,
+        ok: false,
+        text: async () => '<html><head><title>502 Bad Gateway</title></head><body>502 Bad Gateway</body></html>'
+    });
+    await assert.rejects(
+        async () => await testApiCall('/dashboard/stats', 'GET', null, mock502, state, windowMock),
+        /Server is temporarily unavailable \(HTTP 502\)/
+    );
+
+    // 4. Network failure throws connection message
+    const mockNetError = async () => { throw new TypeError('Failed to fetch'); };
+    await assert.rejects(
+        async () => await testApiCall('/students', 'GET', null, mockNetError, state, windowMock),
+        /Unable to connect to server\. Please check your network connection\./
+    );
+
+    // 5. Successful 200 response returns parsed data
+    const mockSuccess = async () => ({
+        status: 200,
+        ok: true,
+        text: async () => JSON.stringify({ count: 42 })
+    });
+    const successRes = await testApiCall('/dashboard/stats', 'GET', null, mockSuccess, state, windowMock);
+    assert.deepStrictEqual(successRes, { count: 42 });
+});

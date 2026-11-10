@@ -1,31 +1,39 @@
 /* ============================================================
-   MAILER
-   - Sends password reset emails over SMTP (nodemailer) when
-     SMTP_* env vars are configured (works with any provider:
-     Gmail app passwords, Elastic Email, Resend SMTP, etc.).
-   - Without SMTP config it falls back to printing the reset link
-     to the server console — perfect for local development.
-   - Exposes lastResetLink so the test suite can grab the link
-     without a real mailbox.
+   MAILER (CIME CMS)
+   - Sends password reset and verification emails over SMTP (nodemailer)
+     when SMTP_* environment variables are configured.
+   - In local development, falls back to printing the link to console.
+   - In production (NODE_ENV=production), NEVER logs sensitive tokens
+     or links to stdout/logs, and returns honest delivery status.
+   - Exposes lastResetLink and lastVerificationLink for test suites.
 ============================================================ */
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
-const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+function isSmtpConfigured() {
+    return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+}
 
 module.exports = {
     lastResetLink: null,
     lastVerificationLink: null,
     _simulatedFailure: false,
+    _forceRealDelivery: false,
+
+    isSmtpConfigured,
 
     async _deliver({ to, subject, text, html, logLine }) {
-        if (process.env.NODE_ENV === 'test') {
+        const isProduction = process.env.NODE_ENV === 'production';
+        const isTest = process.env.NODE_ENV === 'test' && !module.exports._forceRealDelivery;
+
+        if (isTest) {
             if (module.exports._simulatedFailure) {
                 return { delivered: false, error: 'Simulated mailer failure' };
             }
             return { delivered: true }; // tests read the last*Link hooks directly
         }
-        if (smtpConfigured) {
+
+        if (isSmtpConfigured()) {
             try {
                 const transporter = nodemailer.createTransport({
                     host: process.env.SMTP_HOST,
@@ -42,15 +50,23 @@ module.exports = {
                 });
                 return { delivered: true };
             } catch (error) {
-                // Never let a mail outage break the API: log it and still respond 200.
-                // Also print the link so local testing isn't blocked (e.g. Resend's
-                // sandbox only delivers to the account owner until a domain is verified).
-                console.error('[mailer] Failed to send email:', error.message);
-                if (logLine) console.log(logLine);
+                // Log transmission error without dumping tokens or credentials
+                console.error('[mailer] Failed to send email to recipient:', error.message);
+                if (logLine && !isProduction) {
+                    console.log(logLine);
+                }
                 return { delivered: false, error: error.message };
             }
         } else {
-            console.log(logLine);
+            // SMTP is unconfigured
+            if (isProduction) {
+                console.warn('[mailer] Outbound SMTP is not configured. Email suppressed in production.');
+                return { delivered: false, error: 'SMTP is not configured' };
+            }
+            // Local development: safe to log link for developer convenience
+            if (logLine) {
+                console.log(logLine);
+            }
             return { delivered: true, simulated: true };
         }
     },
@@ -59,9 +75,9 @@ module.exports = {
         module.exports.lastVerificationLink = verifyLink;
         return await this._deliver({
             to,
-            subject: 'Cohort ERP — Verify your email',
-            text: `Welcome to Cohort ERP!\n\nConfirm your email by opening this link (valid for 24 hours):\n${verifyLink}\n\nIf you didn't create this account, you can ignore this email.`,
-            html: `<p>Welcome to <strong>Cohort ERP</strong>!</p>` +
+            subject: 'CIME CMS — Verify your email',
+            text: `Welcome to CIME CMS!\n\nConfirm your email by opening this link (valid for 24 hours):\n${verifyLink}\n\nIf you didn't create this account, you can ignore this email.`,
+            html: `<p>Welcome to <strong>CIME CMS</strong>!</p>` +
                   `<p>Confirm your email by <a href="${verifyLink}">clicking here</a> (valid for 24 hours).</p>` +
                   `<p style="color:#888;font-size:12px;">If you didn't create this account, you can ignore this email.</p>`,
             logLine: '\n[mailer] No SMTP configured — email verification link (dev mode):\n' + verifyLink + '\n'
@@ -71,10 +87,10 @@ module.exports = {
     async sendWelcomeEmail({ to, name }) {
         return await this._deliver({
             to,
-            subject: 'Welcome to Cohort ERP 🎓',
-            text: `Hi ${name},\n\nYour Cohort ERP account is verified. You can now sign in at ${process.env.FRONTEND_URL || 'http://localhost:5000'}.`,
+            subject: 'Welcome to CIME CMS 🎓',
+            text: `Hi ${name},\n\nYour CIME CMS account is verified. You can now sign in at ${process.env.FRONTEND_URL || 'http://localhost:5000'}.`,
             html: `<p>Hi <strong>${name}</strong>,</p>` +
-                  `<p>Your Cohort ERP account is verified — you can now <a href="${process.env.FRONTEND_URL || 'http://localhost:5000'}">sign in</a>.</p>`,
+                  `<p>Your CIME CMS account is verified — you can now <a href="${process.env.FRONTEND_URL || 'http://localhost:5000'}">sign in</a>.</p>`,
             logLine: `\n[mailer] No SMTP configured — welcome email for ${name} (dev mode; would be emailed to ${to})\n`
         });
     },
@@ -83,11 +99,11 @@ module.exports = {
         module.exports.lastResetLink = resetLink;
         return await this._deliver({
             to,
-            subject: 'Cohort ERP — Reset your password',
-            text: `You requested a password reset for your Cohort ERP account.\n\n` +
+            subject: 'CIME CMS — Reset your password',
+            text: `You requested a password reset for your CIME CMS account.\n\n` +
                   `Open this link within 30 minutes to set a new password:\n${resetLink}\n\n` +
                   `If you didn't request this, you can safely ignore this email.`,
-            html: `<p>You requested a password reset for your <strong>Cohort ERP</strong> account.</p>` +
+            html: `<p>You requested a password reset for your <strong>CIME CMS</strong> account.</p>` +
                   `<p><a href="${resetLink}">Set a new password</a> (valid for 30 minutes).</p>` +
                   `<p style="color:#888;font-size:12px;">If you didn't request this, you can safely ignore this email.</p>`,
             logLine: '\n[mailer] No SMTP configured — password reset link (dev mode):\n' + resetLink + '\n'

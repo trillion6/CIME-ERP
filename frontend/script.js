@@ -87,19 +87,53 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     const options = { method, headers };
     if (body) options.body = JSON.stringify(body);
     
-    const response = await fetch(`${API_URL}${endpoint}`, options);
-    const data = await response.json();
-    
-    if (response.status === 401) {
-        // Token missing, expired or invalid — return to the login screen
-        localStorage.removeItem('token');
-        sessionStorage.removeItem('token');
-        state.token = null;
-        location.reload();
+    let response;
+    try {
+        response = await fetch(`${API_URL}${endpoint}`, options);
+    } catch (netErr) {
+        throw new Error('Unable to connect to server. Please check your network connection.');
     }
     
-    if (!response.ok) throw new Error(data.error || 'API Error');
-    return data;
+    let data = null;
+    let rawText = '';
+    try {
+        rawText = await response.text();
+        if (rawText && rawText.trim().length > 0) {
+            data = JSON.parse(rawText);
+        }
+    } catch (_) {
+        // Malformed JSON or HTML response (e.g. proxy 502/504 error page)
+        data = null;
+    }
+    
+    if (response.status === 401) {
+        // Only trigger session-expiration reload for authenticated endpoints where a previously
+        // stored token was rejected. Invalid credentials during login (/auth/login) must NOT reload.
+        const isLoginAttempt = endpoint === '/auth/login' || endpoint.startsWith('/auth/login?');
+        if (!isLoginAttempt) {
+            localStorage.removeItem('token');
+            sessionStorage.removeItem('token');
+            state.token = null;
+            location.reload();
+            return;
+        }
+    }
+    
+    if (!response.ok) {
+        let errorMsg = (data && (data.error || data.message));
+        if (!errorMsg) {
+            if (response.status === 502 || response.status === 503 || response.status === 504) {
+                errorMsg = `Server is temporarily unavailable (HTTP ${response.status}). Please try again in a few moments.`;
+            } else if (rawText && rawText.trim().length > 0 && rawText.length < 150 && !rawText.trim().startsWith('<')) {
+                errorMsg = rawText.trim();
+            } else {
+                errorMsg = `Request failed with status ${response.status}`;
+            }
+        }
+        throw new Error(errorMsg);
+    }
+    
+    return data !== null ? data : {};
 }
 
 /* ============================================================
