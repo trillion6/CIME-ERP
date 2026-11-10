@@ -200,7 +200,7 @@ async function handleLogin(e) {
       }
   } finally {
       toggleLoader(false);
-      if(loginBtn){ loginBtn.disabled = false; loginBtn.innerHTML = 'Login to ERP'; }
+      if(loginBtn){ loginBtn.disabled = false; loginBtn.innerHTML = 'Sign In to CIME CMS'; }
   }
 }
 
@@ -424,6 +424,33 @@ function autoGrowTextarea(el){
   el.style.height = Math.max(45, el.scrollHeight) + 'px';
 }
 
+/* Apply institution name to the banner branding elements safely */
+function applyInstitutionBranding(institutionName){
+  if(!institutionName || typeof institutionName !== 'string') return;
+  const trimmed = institutionName.trim();
+  if(!trimmed) return;
+
+  const bannerBrand = document.querySelector('.cb-branding');
+  if(bannerBrand){
+    bannerBrand.setAttribute('aria-label', `${trimmed}, Bhubaneswar`);
+  }
+
+  const kickerEl = document.querySelector('.cb-name-kicker');
+  const mainEl = document.querySelector('.cb-name-main');
+  if(mainEl){
+    if(trimmed === INST_DEFAULTS.inst_name){
+      if(kickerEl){
+        kickerEl.style.display = '';
+        kickerEl.textContent = 'COLLEGE OF';
+      }
+      mainEl.textContent = 'IT & MANAGEMENT EDUCATION';
+    } else {
+      if(kickerEl) kickerEl.style.display = 'none';
+      mainEl.textContent = trimmed;
+    }
+  }
+}
+
 /* Load public branding from GET /api/settings/public before authentication */
 async function loadPublicBranding(){
   try {
@@ -431,8 +458,7 @@ async function loadPublicBranding(){
     if(res.ok){
       const data = await res.json();
       if(data && data.institution_name){
-        const el = document.querySelector('.cb-college-name');
-        if(el) el.textContent = data.institution_name;
+        applyInstitutionBranding(data.institution_name);
       }
     }
   } catch(e){
@@ -473,8 +499,7 @@ async function loadInstitutionSettings(){
           time_zone: data.time_zone,
           contact_email: data.contact_email
         }));
-        const brandingEl = document.querySelector('.cb-college-name');
-        if (brandingEl) brandingEl.textContent = data.institution_name;
+        applyInstitutionBranding(data.institution_name);
       }
     } catch (err) {
       console.warn('Failed to load authoritative settings from database:', err.message);
@@ -506,8 +531,7 @@ async function saveInstitution(){
     const result = await apiCall('/settings/institution', 'PUT', payload);
     localStorage.setItem('cached_institution_settings', JSON.stringify(payload));
     
-    const brandingEl = document.querySelector('.cb-college-name');
-    if(brandingEl) brandingEl.textContent = institution_name;
+    applyInstitutionBranding(institution_name);
 
     showToast(result.message || 'Institution settings saved to database.', 'success');
   } catch(err){
@@ -1598,7 +1622,7 @@ async function exportReport(format){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `cohort-report.${format}`;
+    a.download = `cime-cms-report.${format}`;
     document.body.appendChild(a);
     a.click();
     a.remove();

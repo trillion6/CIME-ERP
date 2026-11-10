@@ -27,8 +27,8 @@ const nodemailer = require('nodemailer');
         await transporter.sendMail({
             from: process.env.SMTP_FROM || process.env.SMTP_USER,
             to,
-            subject: 'Cohort ERP — Test email',
-            text: 'This is a test email from Cohort ERP. Your SMTP configuration works!'
+            subject: 'CIME CMS — Test email',
+            text: 'This is a test email from CIME CMS. Your SMTP configuration works!'
         });
         console.log(`✓ Test email sent to ${to}`);
     } catch (error) {

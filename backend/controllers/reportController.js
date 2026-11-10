@@ -69,14 +69,14 @@ function sendCsv(rows, res) {
         [csvCell(r.department), csvCell(r.semester), r.students, r.avgGrade, r.attendance].join(',')
     ).join('\n');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="cohort-report.csv"');
+    res.setHeader('Content-Disposition', 'attachment; filename="cime-cms-report.csv"');
     res.send(header + body + '\n');
 }
 
 function sendPdf(rows, res, instName) {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="cohort-report.pdf"');
+    res.setHeader('Content-Disposition', 'attachment; filename="cime-cms-report.pdf"');
     doc.pipe(res);
 
     const heading = instName ? `${instName} — Department Report` : 'College of IT and Management Education (CIME) — Department Report';

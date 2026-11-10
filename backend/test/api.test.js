@@ -384,7 +384,15 @@ test('app: serves the frontend at /', async () => {
     const res = await fetch(`http://localhost:${server.address().port}/`);
     assert.strictEqual(res.status, 200);
     const html = await res.text();
-    assert.ok(html.includes('Cohort'));
+    assert.ok(html.includes('<title>CIME CMS — CIME Campus Management System</title>'));
+    assert.ok(html.includes('Sign In to CIME CMS'));
+    assert.ok(html.includes('Campus Management System'));
+    assert.ok(html.includes('C I M E'));
+    assert.ok(html.includes('BHUBANESWAR'));
+    assert.ok(!html.includes('Cohort ERP'));
+    assert.ok(!html.includes('University Manager'));
+    assert.ok(!html.includes('CIME Portal'));
+    assert.ok(!html.includes('Login to ERP'));
     assert.ok(html.includes('script.js'));
 });
 
@@ -875,6 +883,7 @@ test('reports: export CSV + PDF (admin only)', async () => {
     const csvRes = await fetch(base + '/reports/export?format=csv', { headers: { Authorization: `Bearer ${adminToken}` } });
     assert.strictEqual(csvRes.status, 200);
     assert.ok((csvRes.headers.get('content-type') || '').includes('text/csv'));
+    assert.ok((csvRes.headers.get('content-disposition') || '').includes('cime-cms-report.csv'));
     const csvText = await csvRes.text();
     assert.ok(csvText.startsWith('Department,Semester,Students'));
 
@@ -882,6 +891,7 @@ test('reports: export CSV + PDF (admin only)', async () => {
     const pdfRes = await fetch(base + '/reports/export?format=pdf', { headers: { Authorization: `Bearer ${adminToken}` } });
     assert.strictEqual(pdfRes.status, 200);
     assert.ok((pdfRes.headers.get('content-type') || '').includes('application/pdf'));
+    assert.ok((pdfRes.headers.get('content-disposition') || '').includes('cime-cms-report.pdf'));
     const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
     assert.ok(pdfBuf.length > 100);
     assert.strictEqual(pdfBuf.slice(0, 4).toString(), '%PDF');
@@ -2436,4 +2446,77 @@ test('db: resolveCaCertificate handles escaped newlines and file paths', () => {
     assert.strictEqual(appDbPool.resolveCaCertificate(null), null);
     assert.strictEqual(appDbPool.resolveCaCertificate(undefined), null);
     assert.strictEqual(appDbPool.resolveCaCertificate('   '), null);
+});
+
+test('frontend: official CIME CMS branding and dynamic banner helper behave safely', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const scriptSrc = fs.readFileSync(path.join(__dirname, '../../frontend/script.js'), 'utf8');
+
+    assert.ok(scriptSrc.includes('cime-cms-report.${format}'), 'Expected updated export filename in script.js');
+    assert.ok(scriptSrc.includes('Sign In to CIME CMS'), 'Expected updated login button text in script.js');
+    assert.ok(!scriptSrc.includes('cb-college-name'), 'Dead .cb-college-name selector must be removed');
+    assert.ok(!scriptSrc.includes('cohort-report'), 'Old cohort-report filename must be removed from script.js');
+    assert.ok(!scriptSrc.includes('Login to ERP'), 'Old Login to ERP text must be removed from script.js');
+
+    // Verify applyInstitutionBranding handles default, custom, and invalid/offline states gracefully
+    const INST_DEFAULTS = { inst_name: 'College of IT and Management Education (CIME)' };
+    const bannerBrand = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+    const kickerEl = { style: { display: '' }, textContent: 'COLLEGE OF' };
+    const mainEl = { textContent: 'IT & MANAGEMENT EDUCATION' };
+    const documentMock = {
+        querySelector(sel) {
+            if (sel === '.cb-branding') return bannerBrand;
+            if (sel === '.cb-name-kicker') return kickerEl;
+            if (sel === '.cb-name-main') return mainEl;
+            return null;
+        }
+    };
+
+    function applyInstitutionBranding(institutionName) {
+        if (!institutionName || typeof institutionName !== 'string') return;
+        const trimmed = institutionName.trim();
+        if (!trimmed) return;
+        const b = documentMock.querySelector('.cb-branding');
+        if (b) b.setAttribute('aria-label', `${trimmed}, Bhubaneswar`);
+        const k = documentMock.querySelector('.cb-name-kicker');
+        const m = documentMock.querySelector('.cb-name-main');
+        if (m) {
+            if (trimmed === INST_DEFAULTS.inst_name) {
+                if (k) { k.style.display = ''; k.textContent = 'COLLEGE OF'; }
+                m.textContent = 'IT & MANAGEMENT EDUCATION';
+            } else {
+                if (k) k.style.display = 'none';
+                m.textContent = trimmed;
+            }
+        }
+    }
+
+    // Custom institution name hides kicker and populates main element
+    applyInstitutionBranding('CIME Institute of Technology');
+    assert.strictEqual(kickerEl.style.display, 'none');
+    assert.strictEqual(mainEl.textContent, 'CIME Institute of Technology');
+    assert.strictEqual(bannerBrand.attrs['aria-label'], 'CIME Institute of Technology, Bhubaneswar');
+
+    // Default CIME name preserves split banner layout
+    applyInstitutionBranding(INST_DEFAULTS.inst_name);
+    assert.strictEqual(kickerEl.style.display, '');
+    assert.strictEqual(kickerEl.textContent, 'COLLEGE OF');
+    assert.strictEqual(mainEl.textContent, 'IT & MANAGEMENT EDUCATION');
+
+    // Graceful failure when public settings endpoint rejects or returns 503
+    async function loadPublicBrandingSafe(mockFetch) {
+        try {
+            const res = await mockFetch();
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.institution_name) applyInstitutionBranding(data.institution_name);
+            }
+        } catch (e) {
+            // Graceful fallback
+        }
+    }
+    await loadPublicBrandingSafe(async () => { throw new Error('Network down'); });
+    await loadPublicBrandingSafe(async () => ({ ok: false, status: 503 }));
+    assert.strictEqual(mainEl.textContent, 'IT & MANAGEMENT EDUCATION');
 });

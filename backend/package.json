@@ -1,7 +1,7 @@
 {
   "name": "cohort-backend",
   "version": "1.0.0",
-  "description": "API for Cohort ERP",
+  "description": "API for CIME Campus Management System (CIME CMS)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
