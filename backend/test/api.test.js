@@ -2288,3 +2288,74 @@ test('avatar: frontend safeAvatar helper strictly allows approved gradients and 
     assert.strictEqual(safeAvatar('linear-gradient(135deg,#6d5df6,#46a0fc); background: red;'), 'var(--grad-primary)');
     assert.strictEqual(safeAvatar('<script>alert(1)</script>'), 'var(--grad-primary)');
 });
+
+/* ------------------------- DATABASE TLS CONFIGURATION (Phase 4B) ------------------------- */
+test('db: local MySQL configuration executes queries without SSL when DB_SSL is unset or false', async () => {
+    // 1. Verify resolveSslConfig returns undefined for unset and false
+    assert.strictEqual(appDbPool.resolveSslConfig({}), undefined);
+    assert.strictEqual(appDbPool.resolveSslConfig({ DB_SSL: 'false' }), undefined);
+    assert.strictEqual(appDbPool.resolveSslConfig({ DB_SSL: '' }), undefined);
+    assert.strictEqual(appDbPool.resolveSslConfig({ DB_SSL: '0' }), undefined);
+
+    // 2. Verify that active app pool executes queries against local database without SSL
+    const [rows] = await appDbPool.query('SELECT 1 AS active');
+    assert.ok(rows && rows.length > 0);
+    assert.strictEqual(rows[0].active, 1);
+});
+
+test('db: resolveSslConfig generates verified TLS options with minVersion TLSv1.2 and rejectUnauthorized when DB_SSL=true and valid CA is provided', () => {
+    const validPem = '-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END CERTIFICATE-----';
+    const config = appDbPool.resolveSslConfig({ DB_SSL: 'true', DB_SSL_CA: validPem });
+
+    assert.ok(config, 'Expected ssl config object to be returned');
+    assert.strictEqual(config.minVersion, 'TLSv1.2');
+    assert.strictEqual(config.rejectUnauthorized, true);
+    assert.strictEqual(config.ca, validPem);
+});
+
+test('db: resolveSslConfig rejects missing or empty DB_SSL_CA when DB_SSL=true', () => {
+    // Missing DB_SSL_CA
+    assert.throws(
+        () => appDbPool.resolveSslConfig({ DB_SSL: 'true' }),
+        /DB_SSL is enabled but DB_SSL_CA is missing or empty/
+    );
+
+    // Empty DB_SSL_CA
+    assert.throws(
+        () => appDbPool.resolveSslConfig({ DB_SSL: 'true', DB_SSL_CA: '' }),
+        /DB_SSL is enabled but DB_SSL_CA is missing or empty/
+    );
+
+    // Whitespace-only DB_SSL_CA
+    assert.throws(
+        () => appDbPool.resolveSslConfig({ DB_SSL: 'true', DB_SSL_CA: '   \n  ' }),
+        /DB_SSL is enabled but DB_SSL_CA is missing or empty/
+    );
+});
+
+test('db: resolveSslConfig rejects invalid non-PEM CA certificate when DB_SSL=true', () => {
+    // Malformed string missing BEGIN CERTIFICATE
+    assert.throws(
+        () => appDbPool.resolveSslConfig({ DB_SSL: 'true', DB_SSL_CA: 'not-a-certificate-string' }),
+        /DB_SSL_CA does not contain a valid PEM certificate/
+    );
+
+    // Random JSON content
+    assert.throws(
+        () => appDbPool.resolveSslConfig({ DB_SSL: 'true', DB_SSL_CA: '{"type":"not_a_cert"}' }),
+        /DB_SSL_CA does not contain a valid PEM certificate/
+    );
+});
+
+test('db: resolveCaCertificate handles escaped newlines and file paths', () => {
+    // Escaped newlines: \n converted to real newlines
+    const escapedPem = '-----BEGIN CERTIFICATE-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...\\n-----END CERTIFICATE-----';
+    const normalized = appDbPool.resolveCaCertificate(escapedPem);
+    assert.ok(normalized.includes('\n'), 'Expected escaped \\n to be replaced by real newline');
+    assert.ok(!normalized.includes('\\n'), 'Expected no literal \\n to remain');
+
+    // Non-string or empty input
+    assert.strictEqual(appDbPool.resolveCaCertificate(null), null);
+    assert.strictEqual(appDbPool.resolveCaCertificate(undefined), null);
+    assert.strictEqual(appDbPool.resolveCaCertificate('   '), null);
+});
