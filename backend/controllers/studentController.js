@@ -116,7 +116,7 @@ exports.getStudents = async (req, res) => {
         }
 
         // No page param -> full array (used by dashboard, attendance, results, reports)
-        const [rows] = await pool.query(`SELECT * FROM students${whereSql} ORDER BY created_at DESC`);
+        const [rows] = await pool.query(`SELECT * FROM students${whereSql} ORDER BY created_at DESC`, params);
         res.json(await attachDetails(rows));
     } catch (error) {
         console.error('getStudents error:', error);

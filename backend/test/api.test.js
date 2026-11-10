@@ -414,6 +414,84 @@ test('students: full list still returns an array (no page param)', async () => {
     assert.ok(Array.isArray(r.json));
 });
 
+test('students: non-paginated department and semester filters bind parameters safely', async () => {
+    const suffix = Date.now();
+    const s1Res = await api('/students', {
+        method: 'POST',
+        token: adminToken,
+        body: {
+            name: 'Attendance Match Student',
+            email: `att.match.${suffix}@cime.edu`,
+            department: 'MCA',
+            semester: 'Semester 1',
+            status: 'active'
+        }
+    });
+    assert.strictEqual(s1Res.status, 201);
+    const s1Id = s1Res.json.id;
+    cleanupStudentIds.push(s1Id);
+
+    const s2Res = await api('/students', {
+        method: 'POST',
+        token: adminToken,
+        body: {
+            name: 'Attendance Other Student',
+            email: `att.other.${suffix}@cime.edu`,
+            department: 'MBA',
+            semester: 'Semester 2',
+            status: 'inactive'
+        }
+    });
+    assert.strictEqual(s2Res.status, 201);
+    const s2Id = s2Res.json.id;
+    cleanupStudentIds.push(s2Id);
+
+    try {
+        // Exact Attendance page query: department + semester without page param
+        const bothRes = await api('/students?department=MCA&semester=Semester%201', { token: adminToken });
+        assert.strictEqual(bothRes.status, 200);
+        assert.ok(Array.isArray(bothRes.json));
+        assert.ok(bothRes.json.some(s => s.id === s1Id));
+        assert.ok(!bothRes.json.some(s => s.id === s2Id));
+        for (const s of bothRes.json) {
+            assert.strictEqual(s.department, 'MCA');
+            assert.strictEqual(s.semester, 'Semester 1');
+        }
+
+        // Single department filter (non-paginated)
+        const deptRes = await api('/students?department=MBA', { token: adminToken });
+        assert.strictEqual(deptRes.status, 200);
+        assert.ok(Array.isArray(deptRes.json));
+        assert.ok(deptRes.json.some(s => s.id === s2Id));
+        assert.ok(!deptRes.json.some(s => s.id === s1Id));
+
+        // Semester + status filters (non-paginated)
+        const semStatusRes = await api('/students?semester=Semester%202&status=inactive', { token: adminToken });
+        assert.strictEqual(semStatusRes.status, 200);
+        assert.ok(Array.isArray(semStatusRes.json));
+        assert.ok(semStatusRes.json.some(s => s.id === s2Id));
+        assert.ok(!semStatusRes.json.some(s => s1Id === s.id));
+
+        // Paginated department + semester query remains intact
+        const pagedRes = await api('/students?page=1&limit=10&department=MCA&semester=Semester%201', { token: adminToken });
+        assert.strictEqual(pagedRes.status, 200);
+        assert.ok(Array.isArray(pagedRes.json.data));
+        assert.ok(pagedRes.json.data.some(s => s.id === s1Id));
+        assert.ok(!pagedRes.json.data.some(s => s.id === s2Id));
+
+        // Parameterization / SQL injection safety check
+        const injRes = await api(`/students?department=${encodeURIComponent("MCA' OR '1'='1")}&semester=Semester%201`, { token: adminToken });
+        assert.strictEqual(injRes.status, 200);
+        assert.ok(Array.isArray(injRes.json));
+        assert.strictEqual(injRes.json.length, 0);
+    } finally {
+        await api(`/students/${s1Id}`, { method: 'DELETE', token: adminToken });
+        removeFrom(cleanupStudentIds, s1Id);
+        await api(`/students/${s2Id}`, { method: 'DELETE', token: adminToken });
+        removeFrom(cleanupStudentIds, s2Id);
+    }
+});
+
 test('students: create → duplicate → invalid → update → missing → delete', async () => {
     const email = `apitest.${Date.now()}@cime.edu`;
     const body = { name: 'API Test Student', email, gender: 'Male', department: 'MCA', semester: 'Semester 1', status: 'active' };
