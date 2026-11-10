@@ -34,6 +34,15 @@ app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 app.use(morgan('dev'));
 
+// Lightweight health check endpoints for monitoring, Render, and uptime probes
+app.get(['/health', '/api/health'], (req, res) => {
+    res.status(200).json({
+        status: 'ok',
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString()
+    });
+});
+
 app.use('/api', apiRoutes);
 
 // 404 for unknown API routes

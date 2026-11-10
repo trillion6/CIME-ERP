@@ -1,17 +1,29 @@
 /* ============================================================
    API integration tests (node:test — zero extra dependencies)
-   - Requires backend/.env with working MySQL credentials.
+   - Requires local MySQL running with an isolated test database.
    - Run from backend/ with:  npm test
-   - The suite creates its own TEMPORARY database (cohort_erp_test),
-     creates the schema + admin user inside it, and DROPS the
-     database afterwards — your dev database is never touched.
+   - Operates strictly against cohort_erp_test on local loopback.
+   - Resets tables only inside cohort_erp_test —
+     your development database (cohort_erp) is never touched.
 ============================================================ */
 process.env.NODE_ENV = 'test';
 require('dotenv').config();
 
 const TEST_DB = 'cohort_erp_test';
+// Disallow conflicting DB_NAME in environment to prevent silent overwrites
+if (process.env.DB_NAME && process.env.DB_NAME !== TEST_DB) {
+    throw new Error(`SECURITY FATAL: Conflicting DB_NAME detected in environment: "${process.env.DB_NAME}". Integration tests may ONLY target "${TEST_DB}".`);
+}
 // MUST be set before requiring the app: the connection pool is created at require time
 process.env.DB_NAME = TEST_DB;
+
+// Enforce local-only host isolation: refuse to run against any remote database
+const ALLOWED_TEST_HOSTS = ['localhost', '127.0.0.1', '::1'];
+const testHost = (process.env.DB_HOST || 'localhost').toLowerCase();
+if (!ALLOWED_TEST_HOSTS.includes(testHost)) {
+    throw new Error(`SECURITY FATAL: Integration tests may ONLY connect to local loopback (localhost / 127.0.0.1). Remote host rejected: ${testHost}`);
+}
+const testPort = process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306;
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -63,31 +75,57 @@ function todayStr() {
 }
 
 before(async () => {
-    const conn = await mysql.createConnection({
-        host: process.env.DB_HOST || 'localhost',
-        user: process.env.DB_USER || 'root',
-        password: process.env.DB_PASS || '',
-        multipleStatements: true
-    });
+    let conn;
+    try {
+        try {
+            conn = await mysql.createConnection({
+                host: testHost,
+                port: testPort,
+                user: process.env.DB_USER || 'root',
+                password: process.env.DB_PASS || '',
+                database: TEST_DB,
+                multipleStatements: true
+            });
+        } catch (err) {
+            if (err.code === 'ER_BAD_DB_ERROR') {
+                throw new Error(`TEST SETUP ERROR: The isolated test database "${TEST_DB}" does not exist. Please create it once with: CREATE DATABASE ${TEST_DB};`);
+            }
+            throw err;
+        }
 
-    // Fresh temporary database for this run
-    await conn.query(`DROP DATABASE IF EXISTS ${TEST_DB}`);
-    await conn.query(`CREATE DATABASE ${TEST_DB}`);
+        // Safe table-level reset within TEST_DB (no server-level DROP/CREATE DATABASE needed)
+        // Ensure FOREIGN_KEY_CHECKS is restored even if table drop encounters an error
+        try {
+            await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+            const [tables] = await conn.query('SHOW TABLES');
+            for (const row of tables) {
+                const tableName = Object.values(row)[0];
+                await conn.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+            }
+        } finally {
+            await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+        }
 
-    let schema = fs.readFileSync(path.join(__dirname, '..', '..', 'database', 'schema.sql'), 'utf8');
-    schema = schema.replace(/cohort_erp/g, TEST_DB);
-    await conn.query(schema);
+        // Strip database-level DDL from schema.sql and apply table definitions to TEST_DB
+        let schema = fs.readFileSync(path.join(__dirname, '..', '..', 'database', 'schema.sql'), 'utf8');
+        schema = schema.replace(/CREATE\s+DATABASE[^\n;]*;/gi, '').replace(/\bUSE\s+[^\n;]*;/gi, '');
+        await conn.query(schema);
 
-    const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-    await conn.query(
-        `INSERT INTO users (id, email, password_hash, role, email_verified) VALUES (?, ?, ?, 'admin', 1)
-         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
-        [uuidv4(), ADMIN_EMAIL, adminHash]
-    );
-    await conn.end();
+        const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+        await conn.query(
+            `INSERT INTO users (id, email, password_hash, role, email_verified) VALUES (?, ?, ?, 'admin', 1)
+             ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
+            [uuidv4(), ADMIN_EMAIL, adminHash]
+        );
+    } finally {
+        if (conn) {
+            await conn.end();
+        }
+    }
 
     pool = mysql.createPool({
-        host: process.env.DB_HOST || 'localhost',
+        host: testHost,
+        port: testPort,
         user: process.env.DB_USER || 'root',
         password: process.env.DB_PASS || '',
         database: TEST_DB,
@@ -102,31 +140,73 @@ before(async () => {
 });
 
 after(async () => {
-    if (pool) {
+    // 1. Stop accepting new HTTP requests and close active/idle sockets so the server shuts down before pools are closed
+    if (server) {
+        if (server.closeAllConnections) server.closeAllConnections();
+        await new Promise((resolve, reject) => {
+            server.close(err => (err ? reject(err) : resolve()));
+        });
+    }
+
+    // 2. Perform entity cleanup and close test suite connection pool safely if initialized
+    if (pool && typeof pool.end === 'function') {
         for (const id of cleanupStudentIds) {
-            try { await pool.query('DELETE FROM students WHERE id = ?', [id]); } catch {}
+            try { await pool.query('DELETE FROM students WHERE id = ?', [id]); } catch (err) {
+                console.error(`Warning: Failed to clean up test student ${id}:`, err.message);
+            }
         }
         for (const email of cleanupUserEmails) {
-            try { await pool.query('DELETE FROM users WHERE email = ?', [email]); } catch {}
+            try { await pool.query('DELETE FROM users WHERE email = ?', [email]); } catch (err) {
+                console.error(`Warning: Failed to clean up test user ${email}:`, err.message);
+            }
         }
-        await pool.end().catch(() => {});
+        try {
+            await pool.end();
+        } catch (err) {
+            console.error('Warning: Failed to close test suite pool:', err.message);
+        }
     }
-    await appDbPool.end().catch(() => {});
-    if (server) {
-        // fetch keeps keep-alive sockets open, so force-close them so the process can exit
-        if (server.closeAllConnections) server.closeAllConnections();
-        await new Promise(r => server.close(r));
+
+    // 3. Close application connection pool safely if initialized
+    if (appDbPool && typeof appDbPool.end === 'function') {
+        try {
+            await appDbPool.end();
+        } catch (err) {
+            console.error('Warning: Failed to close application DB pool:', err.message);
+        }
     }
-    // Drop the temporary database entirely
+
+    // 4. Final test database table cleanup happens only after server and pools are closed
+    let conn;
     try {
-        const conn = await mysql.createConnection({
-            host: process.env.DB_HOST || 'localhost',
+        conn = await mysql.createConnection({
+            host: testHost,
+            port: testPort,
             user: process.env.DB_USER || 'root',
-            password: process.env.DB_PASS || ''
+            password: process.env.DB_PASS || '',
+            database: TEST_DB,
+            multipleStatements: true
         });
-        await conn.query(`DROP DATABASE IF EXISTS ${TEST_DB}`);
-        await conn.end();
-    } catch {}
+
+        // Ensure FOREIGN_KEY_CHECKS is restored even if table drop encounters an error
+        try {
+            await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+            const [tables] = await conn.query('SHOW TABLES');
+            for (const row of tables) {
+                const tableName = Object.values(row)[0];
+                await conn.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+            }
+        } finally {
+            await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+        }
+    } catch (err) {
+        console.error('Warning: Final test database cleanup encountered an error:', err.message);
+        throw err;
+    } finally {
+        if (conn) {
+            await conn.end();
+        }
+    }
 });
 
 /* ------------------------- AUTH ------------------------- */
@@ -378,8 +458,165 @@ test('attendance + grades: persist and validate', async () => {
     removeFrom(cleanupStudentIds, id);
 });
 
+/* ---------- ATTENDANCE AUTHORIZATION & VALIDATION (Phase 1A) ---------- */
+test('attendance: unauthenticated modification is rejected with 401', async () => {
+    const res = await api('/students/any-id/attendance', {
+        method: 'PUT',
+        body: { date: todayStr(), status: 'present' }
+    });
+    assert.strictEqual(res.status, 401);
+});
+
+test('attendance: unauthorized non-admin user is rejected with 403', async () => {
+    const email = `apitest.att.unauth.${Date.now()}@cime.edu`;
+    await api('/users', { method: 'POST', token: adminToken, body: { email, password: 'secret123', role: 'user' } });
+    cleanupUserEmails.push(email);
+
+    const login = await api('/auth/login', { method: 'POST', body: { email, password: 'secret123' } });
+    const userToken = login.json.token;
+
+    const studentEmail = `apitest.att.target.${Date.now()}@cime.edu`;
+    const created = await api('/students', {
+        method: 'POST', token: adminToken,
+        body: { name: 'Att Target', email: studentEmail, gender: 'Female', department: 'MCA', semester: 'Semester 1', status: 'active' }
+    });
+    const sid = created.json.id;
+    cleanupStudentIds.push(sid);
+
+    // Non-admin user tries to mark attendance -> 403 Forbidden
+    const res = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: userToken,
+        body: { date: todayStr(), status: 'present' }
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.json.error, 'Not authorized as an admin');
+
+    // Clean up
+    await api(`/students/${sid}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupStudentIds, sid);
+    const users = await api('/users', { token: adminToken });
+    const u = users.json.find(x => x.email === email);
+    if (u) await api(`/users/${u.id}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupUserEmails, email);
+});
+
+test('attendance: authorized admin modification succeeds and creates audit log', async () => {
+    const studentEmail = `apitest.att.auth.${Date.now()}@cime.edu`;
+    const created = await api('/students', {
+        method: 'POST', token: adminToken,
+        body: { name: 'Audit Student', email: studentEmail, gender: 'Male', department: 'MBA', semester: 'Semester 1', status: 'active' }
+    });
+    const sid = created.json.id;
+    cleanupStudentIds.push(sid);
+    const date = todayStr();
+
+    // 1. Authorized attendance modification succeeds (200)
+    const res = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { date, status: 'present' }
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.json.message, 'Attendance saved');
+
+    // 2. Existing attendance functionality: verify persistence via public API
+    const list = await api('/students', { token: adminToken });
+    const s = list.json.find(x => x.id === sid);
+    assert.ok(s);
+    assert.strictEqual(s.attendance[date], 'present');
+
+    // 3. Verify audit log creation
+    const logs = await api('/audit?limit=10', { token: adminToken });
+    assert.strictEqual(logs.status, 200);
+    const attLog = logs.json.find(l => l.action === 'attendance.updated' && l.details && l.details.includes('Audit Student'));
+    assert.ok(attLog, 'audit log entry for attendance.updated was created');
+
+    // Clean up
+    await api(`/students/${sid}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupStudentIds, sid);
+});
+
+test('attendance: invalid student ID returns 404', async () => {
+    const res = await api('/students/non-existent-student-id/attendance', {
+        method: 'PUT',
+        token: adminToken,
+        body: { date: todayStr(), status: 'present' }
+    });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.json.error, 'Student not found');
+});
+
+test('attendance: invalid attendance date returns 400', async () => {
+    const studentEmail = `apitest.att.invdate.${Date.now()}@cime.edu`;
+    const created = await api('/students', {
+        method: 'POST', token: adminToken,
+        body: { name: 'Date Student', email: studentEmail, gender: 'Female', department: 'MCA', semester: 'Semester 1', status: 'active' }
+    });
+    const sid = created.json.id;
+    cleanupStudentIds.push(sid);
+
+    // Bad format
+    const res1 = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { date: 'invalid-date', status: 'present' }
+    });
+    assert.strictEqual(res1.status, 400);
+
+    // Bad calendar date (Feb 31)
+    const res2 = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { date: '2026-02-31', status: 'present' }
+    });
+    assert.strictEqual(res2.status, 400);
+
+    // Missing date
+    const res3 = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { status: 'present' }
+    });
+    assert.strictEqual(res3.status, 400);
+
+    // Clean up
+    await api(`/students/${sid}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupStudentIds, sid);
+});
+
+test('attendance: invalid attendance status returns 400', async () => {
+    const studentEmail = `apitest.att.invstatus.${Date.now()}@cime.edu`;
+    const created = await api('/students', {
+        method: 'POST', token: adminToken,
+        body: { name: 'Status Student', email: studentEmail, gender: 'Male', department: 'MCA', semester: 'Semester 1', status: 'active' }
+    });
+    const sid = created.json.id;
+    cleanupStudentIds.push(sid);
+
+    // Invalid status string
+    const res1 = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { date: todayStr(), status: 'excused' }
+    });
+    assert.strictEqual(res1.status, 400);
+
+    // Missing status
+    const res2 = await api(`/students/${sid}/attendance`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { date: todayStr() }
+    });
+    assert.strictEqual(res2.status, 400);
+
+    // Clean up
+    await api(`/students/${sid}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupStudentIds, sid);
+});
+
 /* ------------------------ ROLES ------------------------- */
-test('roles: non-admin can read + mark attendance but not mutate students/grades', async () => {
+test('roles: non-admin can read students but cannot mutate students, attendance, or grades', async () => {
     const email = `apitest.user.${Date.now()}@cime.edu`;
     assert.strictEqual((await api('/users', { method: 'POST', token: adminToken, body: { email, password: 'secret123', role: 'user' } })).status, 201);
     cleanupUserEmails.push(email);
@@ -393,12 +630,12 @@ test('roles: non-admin can read + mark attendance but not mutate students/grades
     assert.strictEqual((await api('/students', { method: 'POST', token: userToken, body: { name: 'X', email: 'x@y.z' } })).status, 403);
     assert.strictEqual((await api('/users', { token: userToken })).status, 403);
 
-    // A real student id for attendance permission checks
+    // A real student id for attendance permission checks -> must be 403 Forbidden
     const page = await api('/students?page=1&limit=1', { token: adminToken });
     if (page.json.data.length) {
         const sid = page.json.data[0].id;
         const date = todayStr();
-        assert.strictEqual((await api(`/students/${sid}/attendance`, { method: 'PUT', token: userToken, body: { date, status: 'late' } })).status, 200);
+        assert.strictEqual((await api(`/students/${sid}/attendance`, { method: 'PUT', token: userToken, body: { date, status: 'late' } })).status, 403);
         assert.strictEqual((await api(`/students/${sid}/grades`, { method: 'PUT', token: userToken, body: { subject: 'X', score: 50 } })).status, 403);
     }
 
@@ -699,4 +936,848 @@ test('users: create validation + duplicate + self-delete + guards', async () => 
 
     removeFrom(cleanupUserEmails, e2);
     removeFrom(cleanupUserEmails, e3);
+});
+
+/* ---------- DASHBOARD STATS & SCALABILITY (Phase 1B) ---------- */
+let p1bAdminToken;
+
+test('phase1b: authenticate active admin session', async () => {
+    // Note: The initial seed admin (id1) was deleted in Test 30 to verify multi-admin guardrails.
+    // Register and authenticate a dedicated, active administrator fixture for Phase 1B verification.
+    const p1bEmail = `p1b.admin.${Date.now()}@cime.edu`;
+    const p1bPass = 'P1bSecureAdminPass#2026';
+    const reg = await api('/auth/register', {
+        method: 'POST',
+        body: { name: 'P1B Admin', email: p1bEmail, password: p1bPass }
+    });
+
+    // 1. Immediately register fixture email for teardown cleanup
+    cleanupUserEmails.push(p1bEmail);
+
+    // 2. Verify registration response and required account fields
+    assert.strictEqual(reg.status, 201);
+    assert.strictEqual(reg.json.email, p1bEmail);
+    assert.strictEqual(reg.json.token, undefined);
+    assert.ok(typeof reg.json.message === 'string' && reg.json.message.length > 0);
+
+    // 3. Promote fixture user to admin and mark email verified in cohort_erp_test
+    const [updateResult] = await pool.query(
+        'UPDATE users SET role = ?, email_verified = 1 WHERE email = ?',
+        ['admin', p1bEmail]
+    );
+    assert.strictEqual(updateResult.affectedRows, 1);
+
+    // 4. Authenticate through existing login API and capture fresh p1bAdminToken
+    const login = await api('/auth/login', {
+        method: 'POST',
+        body: { email: p1bEmail, password: p1bPass }
+    });
+    assert.strictEqual(login.status, 200);
+    assert.ok(login.json.token);
+    assert.strictEqual(login.json.role, 'admin');
+    assert.strictEqual(login.json.email, p1bEmail);
+    p1bAdminToken = login.json.token;
+});
+
+test('dashboard: stats endpoint authentication and structure (Phase 1B)', async () => {
+    // 1. Unauthenticated request must be rejected
+    const unauth = await api('/dashboard/stats');
+    assert.strictEqual(unauth.status, 401);
+
+    // 2. Authenticated request must return high-speed aggregated structure
+    const res = await api('/dashboard/stats', { token: p1bAdminToken });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(typeof res.json.totalMCA, 'number');
+    assert.strictEqual(typeof res.json.totalMBA, 'number');
+    assert.strictEqual(typeof res.json.totalActive, 'number');
+    assert.strictEqual(typeof res.json.totalStudents, 'number');
+    assert.strictEqual(typeof res.json.mcaAttToday, 'number');
+    assert.strictEqual(typeof res.json.mbaAttToday, 'number');
+
+    // 3. Verify 7-day trend array
+    assert.ok(Array.isArray(res.json.attendanceTrend));
+    assert.strictEqual(res.json.attendanceTrend.length, 7);
+    res.json.attendanceTrend.forEach(day => {
+        assert.ok(typeof day.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day.date));
+        assert.strictEqual(typeof day.rate, 'number');
+    });
+
+    // 4. Verify recent students array (capped at 5)
+    assert.ok(Array.isArray(res.json.recentStudents));
+    assert.ok(res.json.recentStudents.length <= 5);
+});
+
+test('students: fetch single student by ID on demand (Phase 1B)', async () => {
+    // 1. Create a student with attendance and grade
+    const email = `apitest.byid.${Date.now()}@cime.edu`;
+    const created = await api('/students', {
+        method: 'POST', token: p1bAdminToken,
+        body: { name: 'ById Student', email, gender: 'Female', department: 'MCA', semester: 'Semester 1', status: 'active' }
+    });
+    const id = created.json.id;
+    cleanupStudentIds.push(id);
+
+    const date = todayStr();
+    await api(`/students/${id}/attendance`, { method: 'PUT', token: p1bAdminToken, body: { date, status: 'present' } });
+    await api(`/students/${id}/grades`, { method: 'PUT', token: p1bAdminToken, body: { subject: 'Database Systems', score: 95 } });
+
+    // 2. Unauthenticated request -> 401
+    assert.strictEqual((await api(`/students/${id}`)).status, 401);
+
+    // 3. Authenticated request -> 200 with student + attached attendance and grades
+    const fetched = await api(`/students/${id}`, { token: p1bAdminToken });
+    assert.strictEqual(fetched.status, 200);
+    assert.strictEqual(fetched.json.id, id);
+    assert.strictEqual(fetched.json.name, 'ById Student');
+    assert.ok(fetched.json.attendance && fetched.json.attendance[date] === 'present');
+    assert.ok(fetched.json.grades && fetched.json.grades['Database Systems'] === 95);
+
+    // 4. Non-existent student -> 404
+    assert.strictEqual((await api('/students/non-existent-uuid', { token: p1bAdminToken })).status, 404);
+
+    // Clean up
+    await api(`/students/${id}`, { method: 'DELETE', token: p1bAdminToken });
+    removeFrom(cleanupStudentIds, id);
+});
+
+test('reports: export CSV and PDF with independent aggregations (Phase 1B)', async () => {
+    // 1. Invalid format -> 400
+    assert.strictEqual((await api('/reports/export?format=xml', { token: p1bAdminToken })).status, 400);
+
+    // 2. CSV export -> 200 with text/csv header
+    const csvRes = await fetch(base + '/reports/export?format=csv', {
+        headers: { Authorization: `Bearer ${p1bAdminToken}` }
+    });
+    assert.strictEqual(csvRes.status, 200);
+    assert.ok((csvRes.headers.get('content-type') || '').includes('text/csv'));
+    const csvText = await csvRes.text();
+    assert.ok(csvText.startsWith('Department,Semester,Students,Average Grade %,Attendance %'));
+
+    // 3. PDF export -> 200 with application/pdf header and PDF magic bytes
+    const pdfRes = await fetch(base + '/reports/export?format=pdf', {
+        headers: { Authorization: `Bearer ${p1bAdminToken}` }
+    });
+    assert.strictEqual(pdfRes.status, 200);
+    assert.ok((pdfRes.headers.get('content-type') || '').includes('application/pdf'));
+    const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+    assert.ok(pdfBuf.length > 100);
+    assert.strictEqual(pdfBuf.slice(0, 4).toString(), '%PDF');
+});
+
+/* ---------- INSTITUTIONAL SETTINGS (Phase 1C) ---------- */
+test('settings: public endpoint exposes only institution_name (Phase 1C)', async () => {
+    // Public endpoint: unauthenticated access allowed, exposes ONLY institution_name
+    const res = await api('/settings/public');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(typeof res.json.institution_name, 'string');
+    assert.ok(res.json.institution_name.length > 0);
+    // Security check: must NOT leak internal email, timezone, or database id to public visitors
+    assert.strictEqual(res.json.academic_year, undefined);
+    assert.strictEqual(res.json.time_zone, undefined);
+    assert.strictEqual(res.json.contact_email, undefined);
+    assert.strictEqual(res.json.id, undefined);
+});
+
+test('settings: unauthenticated access to protected settings rejected with 401 (Phase 1C)', async () => {
+    assert.strictEqual((await api('/settings/institution')).status, 401);
+    assert.strictEqual((await api('/settings/institution', { method: 'PUT', body: { institution_name: 'Test' } })).status, 401);
+});
+
+test('settings: authenticated non-admin user can read settings but cannot modify them (Phase 1C)', async () => {
+    const uEmail = `user.settings.${Date.now()}@cime.edu`;
+    const uPass = 'UserPassSecure#2026';
+    const reg = await api('/auth/register', { method: 'POST', body: { name: 'Settings User', email: uEmail, password: uPass } });
+    assert.strictEqual(reg.status, 201);
+    cleanupUserEmails.push(uEmail);
+
+    await pool.query('UPDATE users SET email_verified = 1 WHERE email = ?', [uEmail]);
+    const login = await api('/auth/login', { method: 'POST', body: { email: uEmail, password: uPass } });
+    assert.strictEqual(login.status, 200);
+    const userToken = login.json.token;
+
+    // 1. Authenticated user can read settings -> 200
+    const getRes = await api('/settings/institution', { token: userToken });
+    assert.strictEqual(getRes.status, 200);
+    assert.strictEqual(getRes.json.id, 1);
+    assert.strictEqual(typeof getRes.json.institution_name, 'string');
+    assert.strictEqual(typeof getRes.json.academic_year, 'string');
+    assert.strictEqual(typeof getRes.json.time_zone, 'string');
+    assert.strictEqual(typeof getRes.json.contact_email, 'string');
+
+    // 2. Non-admin user cannot modify settings -> 403 Forbidden
+    const putRes = await api('/settings/institution', {
+        method: 'PUT',
+        token: userToken,
+        body: {
+            institution_name: 'Unauthorized Edit',
+            academic_year: '2026 – 2027',
+            time_zone: 'Asia/Kolkata',
+            contact_email: 'hacker@cime.edu'
+        }
+    });
+    assert.strictEqual(putRes.status, 403);
+});
+
+test('settings: invalid payload rejected with 400 (validation) (Phase 1C)', async () => {
+    const validBase = {
+        institution_name: 'College of IT and Management Education (CIME)',
+        academic_year: '2026 – 2027',
+        time_zone: 'Asia/Kolkata',
+        contact_email: 'admin@cime.edu'
+    };
+
+    // 1. Missing / empty institution name -> 400
+    const r1 = await api('/settings/institution', { method: 'PUT', token: p1bAdminToken, body: { ...validBase, institution_name: '' } });
+    assert.strictEqual(r1.status, 400);
+
+    // 2. Missing / empty academic year -> 400
+    const r2 = await api('/settings/institution', { method: 'PUT', token: p1bAdminToken, body: { ...validBase, academic_year: '' } });
+    assert.strictEqual(r2.status, 400);
+
+    // 3. Academic year exceeding 50 chars -> 400
+    const r3 = await api('/settings/institution', { method: 'PUT', token: p1bAdminToken, body: { ...validBase, academic_year: 'A'.repeat(51) } });
+    assert.strictEqual(r3.status, 400);
+
+    // 4. Invalid IANA timezone -> 400
+    const r4 = await api('/settings/institution', { method: 'PUT', token: p1bAdminToken, body: { ...validBase, time_zone: 'Invalid/NonExistent_Zone' } });
+    assert.strictEqual(r4.status, 400);
+
+    // 5. Invalid email -> 400
+    const r5 = await api('/settings/institution', { method: 'PUT', token: p1bAdminToken, body: { ...validBase, contact_email: 'not-an-email' } });
+    assert.strictEqual(r5.status, 400);
+});
+
+test('settings: admin can update institutional settings, persist changes and create audit log (Phase 1C)', async () => {
+    const updatedPayload = {
+        institution_name: 'College of IT & Management Education (CIME Campus)',
+        academic_year: '2026 – 2027 (Autumn)',
+        time_zone: 'Asia/Kolkata',
+        contact_email: 'registrar@cime.edu'
+    };
+
+    // 1. Admin update succeeds -> 200
+    const updateRes = await api('/settings/institution', {
+        method: 'PUT',
+        token: p1bAdminToken,
+        body: updatedPayload
+    });
+    assert.strictEqual(updateRes.status, 200);
+    assert.strictEqual(updateRes.json.settings.institution_name, updatedPayload.institution_name);
+    assert.strictEqual(updateRes.json.settings.academic_year, updatedPayload.academic_year);
+    assert.strictEqual(updateRes.json.settings.contact_email, updatedPayload.contact_email);
+
+    // 2. Subsequent GET reflects persisted changes
+    const getRes = await api('/settings/institution', { token: p1bAdminToken });
+    assert.strictEqual(getRes.status, 200);
+    assert.strictEqual(getRes.json.institution_name, updatedPayload.institution_name);
+    assert.strictEqual(getRes.json.academic_year, updatedPayload.academic_year);
+    assert.strictEqual(getRes.json.contact_email, updatedPayload.contact_email);
+
+    // 3. Public branding endpoint also reflects updated institution name
+    const publicRes = await api('/settings/public');
+    assert.strictEqual(publicRes.status, 200);
+    assert.strictEqual(publicRes.json.institution_name, updatedPayload.institution_name);
+
+    // 4. Audit trail entry created with 'settings.updated'
+    const auditRes = await api('/audit?limit=10', { token: p1bAdminToken });
+    assert.strictEqual(auditRes.status, 200);
+    const settingLog = auditRes.json.find(l => l.action === 'settings.updated' && l.details && l.details.includes('CIME Campus'));
+    assert.ok(settingLog, 'audit log entry for settings.updated was recorded');
+});
+
+test('settings: migration initialization does not overwrite existing administrator settings (Phase 1C)', async () => {
+    // 1. Read the actual migration file from disk
+    const migrationPath = path.join(__dirname, '..', '..', 'database', 'migrations', '002_institutional_settings.sql');
+    const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+    assert.ok(migrationSql.includes('INSERT IGNORE INTO institutional_settings'), 'migration must use INSERT IGNORE');
+    assert.ok(migrationSql.includes('CONSTRAINT chk_singleton_id'), 'migration must declare chk_singleton_id');
+
+    // 2. Customize existing test settings row before running migration
+    const customPayload = {
+        institution_name: 'Customized CIME Institute of Technology',
+        academic_year: '2027 – 2028',
+        time_zone: 'Asia/Kolkata',
+        contact_email: 'custom.admin@cime.edu'
+    };
+    const putRes = await api('/settings/institution', {
+        method: 'PUT',
+        token: p1bAdminToken,
+        body: customPayload
+    });
+    assert.strictEqual(putRes.status, 200);
+
+    // 3. Execute the actual migration SQL against cohort_erp_test
+    const conn = await mysql.createConnection({
+        host: testHost,
+        port: testPort,
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASS || '',
+        database: TEST_DB,
+        multipleStatements: true
+    });
+    try {
+        await conn.query(migrationSql);
+    } finally {
+        await conn.end();
+    }
+
+    // 4. Verify customized settings were 100% preserved after executing the actual migration file
+    const postCheck = await api('/settings/institution', { token: p1bAdminToken });
+    assert.strictEqual(postCheck.status, 200);
+    assert.strictEqual(postCheck.json.institution_name, customPayload.institution_name);
+    assert.strictEqual(postCheck.json.academic_year, customPayload.academic_year);
+    assert.strictEqual(postCheck.json.contact_email, customPayload.contact_email);
+
+    // 5. Restore clean default settings
+    await api('/settings/institution', {
+        method: 'PUT',
+        token: p1bAdminToken,
+        body: {
+            institution_name: 'College of IT and Management Education (CIME)',
+            academic_year: '2026 – 2027',
+            time_zone: 'Asia/Kolkata',
+            contact_email: 'admin@cime.edu'
+        }
+    });
+});
+
+test('settings: database rejects rows with id != 1 via CHECK constraint (Phase 1C)', async () => {
+    // Database singleton enforcement: CHECK (id = 1) must reject any secondary row
+    await assert.rejects(
+        async () => {
+            await pool.query(
+                `INSERT INTO institutional_settings (id, institution_name, academic_year, time_zone, contact_email)
+                 VALUES (2, 'Invalid Second Campus', '2026 – 2027', 'Asia/Kolkata', 'second@cime.edu')`
+            );
+        },
+        err => err.code === 'ER_CHECK_CONSTRAINT_VIOLATED' || /check constraint/i.test(err.message)
+    );
+});
+
+test('reports: reject PDF generation with 503 during settings database outage (Phase 1C)', async () => {
+    const settingsCtrl = require('../controllers/settingsController');
+    if (typeof settingsCtrl._clearCacheForTesting === 'function') {
+        settingsCtrl._clearCacheForTesting();
+    }
+
+    // Simulate complete table/database outage in cohort_erp_test
+    await pool.query('RENAME TABLE institutional_settings TO institutional_settings_backup');
+    try {
+        // 1. PDF generation must fail with 503 rather than silently using misleading default branding
+        const pdfRes = await fetch(base + '/reports/export?format=pdf', {
+            headers: { Authorization: `Bearer ${p1bAdminToken}` }
+        });
+        assert.strictEqual(pdfRes.status, 503);
+        const body = await pdfRes.json();
+        assert.ok(body.error && body.error.includes('Institutional settings'));
+
+        // 2. CSV generation continues functioning independently
+        const csvRes = await fetch(base + '/reports/export?format=csv', {
+            headers: { Authorization: `Bearer ${p1bAdminToken}` }
+        });
+        assert.strictEqual(csvRes.status, 200);
+        assert.ok((csvRes.headers.get('content-type') || '').includes('text/csv'));
+    } finally {
+        await pool.query('RENAME TABLE institutional_settings_backup TO institutional_settings');
+    }
+});
+
+/* ============================================================
+   PHASE 1D: MULTI-STEP ATOMIC TRANSACTIONS (WORKSTREAM 5)
+   - Verifies ACID guarantees, rollback behavior on failure,
+     concurrency serialization, and accurate email reporting.
+   - Non-privileged: Uses temporary narrowly scoped CHECK constraints
+     and deterministic token collisions (no SUPER triggers needed).
+============================================================ */
+
+test('auth: registration rolls back user record if token insert fails (Phase 1D)', async () => {
+    // 1. Create a dummy test user and pre-seed a colliding token in email_verifications
+    const dummyEmail = `apitest.dummy.regcol.${Date.now()}@cime.edu`;
+    const dummyUserId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, password_hash, role, email_verified) VALUES (?, ?, ?, ?, 0)',
+        [dummyUserId, dummyEmail, 'dummyhash', 'user']
+    );
+    cleanupUserEmails.push(dummyEmail);
+
+    const rawBuffer = Buffer.alloc(32, 0x41);
+    const hexToken = rawBuffer.toString('hex');
+    const collisionHash = crypto.createHash('sha256').update(hexToken).digest('hex');
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [dummyUserId, collisionHash]
+    );
+
+    const targetEmail = `apitest.reg.rollback.${Date.now()}@cime.edu`;
+
+    // 2. Mock crypto.randomBytes to return rawBuffer during registration
+    const origRandomBytes = crypto.randomBytes;
+    try {
+        crypto.randomBytes = () => rawBuffer;
+
+        // Registration attempt must fail with 500 because the token_hash UNIQUE constraint collides with dummy user's token
+        const res = await api('/auth/register', {
+            method: 'POST',
+            body: { name: 'Rollback User', email: targetEmail, password: 'password123' }
+        });
+        assert.strictEqual(res.status, 500);
+
+        // Verification: The transaction must have rolled back the user creation completely
+        const [rows] = await pool.query('SELECT id FROM users WHERE email = ?', [targetEmail]);
+        assert.strictEqual(rows.length, 0, 'No orphaned user record must remain in users table after token insert collision');
+    } finally {
+        crypto.randomBytes = origRandomBytes;
+    }
+
+    // 3. After transient collision is resolved, registration with the exact same email must succeed (not fail with 409)
+    const retry = await api('/auth/register', {
+        method: 'POST',
+        body: { name: 'Rollback User', email: targetEmail, password: 'password123' }
+    });
+    assert.strictEqual(retry.status, 201);
+    assert.strictEqual(retry.json.email, targetEmail);
+    cleanupUserEmails.push(targetEmail);
+
+    // Verify user now exists in users table and has an active token in email_verifications
+    const [freshUsers] = await pool.query('SELECT id, email_verified FROM users WHERE email = ?', [targetEmail]);
+    assert.strictEqual(freshUsers.length, 1);
+    assert.strictEqual(Number(freshUsers[0].email_verified), 0);
+    const [freshTokens] = await pool.query('SELECT id, used_at FROM email_verifications WHERE user_id = ?', [freshUsers[0].id]);
+    assert.strictEqual(freshTokens.length, 1);
+    assert.strictEqual(freshTokens[0].used_at, null);
+});
+
+test('auth: verify-email rolls back token claim if user activation fails (Phase 1D)', async () => {
+    const chkName = 'chk_test_fail_activation';
+    const email = `apitest.ver.rollback.${Date.now()}@cime.edu`;
+
+    // 1. Register a valid unverified test user
+    mailer.lastVerificationLink = null;
+    const reg = await api('/auth/register', {
+        method: 'POST',
+        body: { name: 'Verify Rollback User', email, password: 'password123' }
+    });
+    assert.strictEqual(reg.status, 201);
+    cleanupUserEmails.push(email);
+
+    const token = mailer.lastVerificationLink.split('verify=')[1];
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    const [uRows] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+    const targetUserId = uRows[0].id;
+
+    try {
+        // 2. Install narrowly scoped CHECK constraint valid for existing rows but rejecting only targetUserId activation
+        await pool.query(
+            `ALTER TABLE users ADD CONSTRAINT \`${chkName}\` CHECK (id <> '${targetUserId}' OR email_verified = 0)`
+        );
+
+        // 3. Attempt email verification: must fail with 500
+        const verifyRes = await api('/auth/verify-email?token=' + token);
+        assert.strictEqual(verifyRes.status, 500);
+
+        // 4. Verify that the token claim was rolled back: used_at must remain NULL
+        const [tokenRows] = await pool.query('SELECT used_at FROM email_verifications WHERE token_hash = ?', [tokenHash]);
+        assert.strictEqual(tokenRows.length, 1);
+        assert.strictEqual(tokenRows[0].used_at, null, 'used_at must remain NULL when user activation fails');
+
+        // User must remain unverified
+        const [userRows] = await pool.query('SELECT email_verified FROM users WHERE id = ?', [targetUserId]);
+        assert.strictEqual(Number(userRows[0].email_verified), 0);
+    } finally {
+        await pool.query(`ALTER TABLE users DROP CHECK \`${chkName}\``);
+    }
+
+    // 5. After transient constraint is removed, email verification with the exact same token succeeds
+    const successRes = await api('/auth/verify-email?token=' + token);
+    assert.strictEqual(successRes.status, 200);
+
+    // Verify token is now marked used and user is verified
+    const [finalTokenRows] = await pool.query('SELECT used_at FROM email_verifications WHERE token_hash = ?', [tokenHash]);
+    assert.ok(finalTokenRows[0].used_at !== null, 'used_at is stamped on successful verification');
+    const [finalUserRows] = await pool.query('SELECT email_verified FROM users WHERE id = ?', [targetUserId]);
+    assert.strictEqual(Number(finalUserRows[0].email_verified), 1);
+});
+
+test('auth: reset-password rolls back token claim if password update fails (Phase 1D)', async () => {
+    const chkName = 'chk_test_fail_password_update';
+    const email = `apitest.reset.rollback.${Date.now()}@cime.edu`;
+
+    // 1. Create verified test user
+    const userHash = await bcrypt.hash('originalpassword123', 10);
+    const targetUserId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 1)',
+        [targetUserId, email, 'Reset Rollback User', userHash, 'user']
+    );
+    cleanupUserEmails.push(email);
+
+    // 2. Request password reset
+    mailer.lastResetLink = null;
+    const forgotRes = await api('/auth/forgot-password', { method: 'POST', body: { email } });
+    assert.strictEqual(forgotRes.status, 200);
+    const resetToken = mailer.lastResetLink.split('reset=')[1];
+    const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    try {
+        // 3. Install narrowly scoped CHECK constraint valid for current hash but rejecting any modification for targetUserId
+        await pool.query(
+            `ALTER TABLE users ADD CONSTRAINT \`${chkName}\` CHECK (id <> '${targetUserId}' OR password_hash = '${userHash}')`
+        );
+
+        // 4. Attempt password reset: must fail with 500
+        const resetRes = await api('/auth/reset-password', {
+            method: 'POST',
+            body: { token: resetToken, newPassword: 'newpassword456' }
+        });
+        assert.strictEqual(resetRes.status, 500);
+
+        // 5. Verify token claim was rolled back: used_at must remain NULL
+        const [tokenRows] = await pool.query('SELECT used_at FROM password_resets WHERE token_hash = ?', [tokenHash]);
+        assert.strictEqual(tokenRows.length, 1);
+        assert.strictEqual(tokenRows[0].used_at, null, 'used_at must remain NULL when password update fails');
+
+        // Original password must still authenticate
+        const loginOld = await api('/auth/login', { method: 'POST', body: { email, password: 'originalpassword123' } });
+        assert.strictEqual(loginOld.status, 200);
+    } finally {
+        await pool.query(`ALTER TABLE users DROP CHECK \`${chkName}\``);
+    }
+
+    // 6. After removing constraint, password reset succeeds with the same token
+    const successRes = await api('/auth/reset-password', {
+        method: 'POST',
+        body: { token: resetToken, newPassword: 'newpassword456' }
+    });
+    assert.strictEqual(successRes.status, 200);
+
+    // Verify old password no longer works, new password works
+    const loginFail = await api('/auth/login', { method: 'POST', body: { email, password: 'originalpassword123' } });
+    assert.strictEqual(loginFail.status, 401);
+    const loginNew = await api('/auth/login', { method: 'POST', body: { email, password: 'newpassword456' } });
+    assert.strictEqual(loginNew.status, 200);
+});
+
+test('auth: resend-verification preserves prior tokens if replacement insert fails (Phase 1D)', async () => {
+    // 1. Create dummy collision user and pre-seed a colliding token in email_verifications
+    const dummyEmail = `apitest.dummy.resendcol.${Date.now()}@cime.edu`;
+    const dummyUserId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, password_hash, role, email_verified) VALUES (?, ?, ?, ?, 0)',
+        [dummyUserId, dummyEmail, 'dummyhash', 'user']
+    );
+    cleanupUserEmails.push(dummyEmail);
+
+    const rawBuffer = Buffer.alloc(32, 0x42);
+    const hexToken = rawBuffer.toString('hex');
+    const collisionHash = crypto.createHash('sha256').update(hexToken).digest('hex');
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [dummyUserId, collisionHash]
+    );
+
+    // 2. Register target test user -> generates initial token
+    const targetEmail = `apitest.resend.rollback.${Date.now()}@cime.edu`;
+    mailer.lastVerificationLink = null;
+    await api('/auth/register', {
+        method: 'POST',
+        body: { name: 'Resend Rollback User', email: targetEmail, password: 'password123' }
+    });
+    cleanupUserEmails.push(targetEmail);
+    const firstToken = mailer.lastVerificationLink.split('verify=')[1];
+
+    // 3. Mock crypto.randomBytes to return rawBuffer during resend-verification
+    const origRandomBytes = crypto.randomBytes;
+    try {
+        crypto.randomBytes = () => rawBuffer;
+
+        // Attempt resend-verification: replacement token insert collides with dummy user's token and fails with 500
+        const resendRes = await api('/auth/resend-verification', { method: 'POST', body: { email: targetEmail } });
+        assert.strictEqual(resendRes.status, 500);
+
+        // 4. Verify transaction rollback: the target user's prior token was NOT permanently deleted!
+        const [tokenRows] = await pool.query(
+            'SELECT ev.id, ev.used_at FROM email_verifications ev JOIN users u ON ev.user_id = u.id WHERE u.email = ?',
+            [targetEmail]
+        );
+        assert.strictEqual(tokenRows.length, 1, 'Prior verification token must be preserved after rollback');
+        assert.strictEqual(tokenRows[0].used_at, null);
+    } finally {
+        crypto.randomBytes = origRandomBytes;
+    }
+
+    // 5. The preserved initial token still verifies the user successfully
+    const verifyRes = await api('/auth/verify-email?token=' + firstToken);
+    assert.strictEqual(verifyRes.status, 200);
+});
+
+test('auth: forgot-password preserves prior reset tokens if replacement insert fails (Phase 1D)', async () => {
+    // 1. Create dummy collision user and pre-seed a colliding token in password_resets
+    const dummyEmail = `apitest.dummy.forgotcol.${Date.now()}@cime.edu`;
+    const dummyUserId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, password_hash, role, email_verified) VALUES (?, ?, ?, ?, 1)',
+        [dummyUserId, dummyEmail, 'dummyhash', 'user']
+    );
+    cleanupUserEmails.push(dummyEmail);
+
+    const rawBuffer = Buffer.alloc(32, 0x43);
+    const hexToken = rawBuffer.toString('hex');
+    const collisionHash = crypto.createHash('sha256').update(hexToken).digest('hex');
+    await pool.query(
+        'INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [dummyUserId, collisionHash]
+    );
+
+    // 2. Create target verified user
+    const targetEmail = `apitest.forgot.rollback.${Date.now()}@cime.edu`;
+    const userHash = await bcrypt.hash('oldpassword123', 10);
+    const targetUserId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 1)',
+        [targetUserId, targetEmail, 'Forgot Target User', userHash, 'user']
+    );
+    cleanupUserEmails.push(targetEmail);
+
+    // 3. Request initial reset token
+    mailer.lastResetLink = null;
+    await api('/auth/forgot-password', { method: 'POST', body: { email: targetEmail } });
+    const firstResetToken = mailer.lastResetLink.split('reset=')[1];
+
+    // 4. Mock crypto.randomBytes to return rawBuffer during second forgot-password
+    const origRandomBytes = crypto.randomBytes;
+    try {
+        crypto.randomBytes = () => rawBuffer;
+
+        // Attempt second forgot-password: replacement token insert collides with dummy user's token and fails with 500
+        const secondForgotRes = await api('/auth/forgot-password', { method: 'POST', body: { email: targetEmail } });
+        assert.strictEqual(secondForgotRes.status, 500);
+
+        // 5. Verify transaction rollback: the target user's initial reset token was NOT permanently deleted
+        const [tokenRows] = await pool.query(
+            'SELECT pr.id, pr.used_at FROM password_resets pr WHERE pr.user_id = ?',
+            [targetUserId]
+        );
+        assert.strictEqual(tokenRows.length, 1, 'Prior reset token must be preserved after rollback');
+        assert.strictEqual(tokenRows[0].used_at, null);
+    } finally {
+        crypto.randomBytes = origRandomBytes;
+    }
+
+    // 6. The preserved initial reset token still succeeds in resetting the password
+    const resetRes = await api('/auth/reset-password', {
+        method: 'POST',
+        body: { token: firstResetToken, newPassword: 'brandnewpassword123' }
+    });
+    assert.strictEqual(resetRes.status, 200);
+});
+
+test('auth: concurrent reset-password requests are serialized atomically (Phase 1D)', async () => {
+    const email = `apitest.concurr.reset.${Date.now()}@cime.edu`;
+    const userHash = await bcrypt.hash('concurrbasepass', 10);
+    const userId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 1)',
+        [userId, email, 'Concurrent Reset User', userHash, 'user']
+    );
+    cleanupUserEmails.push(email);
+
+    mailer.lastResetLink = null;
+    await api('/auth/forgot-password', { method: 'POST', body: { email } });
+    const resetToken = mailer.lastResetLink.split('reset=')[1];
+
+    // Fire two reset requests with the exact same token concurrently
+    const [r1, r2] = await Promise.all([
+        api('/auth/reset-password', { method: 'POST', body: { token: resetToken, newPassword: 'winnerpassword1' } }),
+        api('/auth/reset-password', { method: 'POST', body: { token: resetToken, newPassword: 'winnerpassword2' } })
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepStrictEqual(statuses, [200, 400], 'Exactly one concurrent request succeeds (200) and the other is rejected (400)');
+});
+
+test('auth: concurrent verify-email requests are serialized atomically (Phase 1D)', async () => {
+    const email = `apitest.concurr.ver.${Date.now()}@cime.edu`;
+    mailer.lastVerificationLink = null;
+    await api('/auth/register', {
+        method: 'POST',
+        body: { name: 'Concurrent Verify User', email, password: 'password123' }
+    });
+    cleanupUserEmails.push(email);
+    const verifyToken = mailer.lastVerificationLink.split('verify=')[1];
+
+    // Fire two verification requests with the exact same token concurrently
+    const [r1, r2] = await Promise.all([
+        api('/auth/verify-email?token=' + verifyToken),
+        api('/auth/verify-email?token=' + verifyToken)
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepStrictEqual(statuses, [200, 400], 'Exactly one concurrent verification succeeds (200) and the other is rejected (400)');
+});
+
+test('auth: registration accurately reports email delivery failure when mailer fails (Phase 1D)', async () => {
+    const email = `apitest.mailfail.${Date.now()}@cime.edu`;
+    mailer.lastVerificationLink = null;
+    mailer._simulatedFailure = true;
+
+    try {
+        const res = await api('/auth/register', {
+            method: 'POST',
+            body: { name: 'Mailer Fail User', email, password: 'password123' }
+        });
+        assert.strictEqual(res.status, 201);
+        assert.strictEqual(res.json.email, email);
+        assert.strictEqual(res.json.emailDelivered, false);
+        assert.ok(
+            res.json.message.includes('could not be delivered') || res.json.message.includes('resend verification'),
+            'Accurately communicates delivery failure without claiming verification email was dispatched'
+        );
+        cleanupUserEmails.push(email);
+
+        // Account is still created in the database and can be verified via resend-verification
+        const [userRows] = await pool.query('SELECT id, email_verified FROM users WHERE email = ?', [email]);
+        assert.strictEqual(userRows.length, 1);
+        assert.strictEqual(Number(userRows[0].email_verified), 0);
+    } finally {
+        mailer._simulatedFailure = false;
+    }
+
+    // Now resend-verification with restored mailer succeeds
+    mailer.lastVerificationLink = null;
+    const resendRes = await api('/auth/resend-verification', { method: 'POST', body: { email } });
+    assert.strictEqual(resendRes.status, 200);
+    assert.ok(mailer.lastVerificationLink, 'Resend verification emits link after mailer restoration');
+    const freshToken = mailer.lastVerificationLink.split('verify=')[1];
+
+    // Complete verification
+    const verifyRes = await api('/auth/verify-email?token=' + freshToken);
+    assert.strictEqual(verifyRes.status, 200);
+});
+
+test('auth: resend and forgot-password preserve anti-enumeration responses during mailer failure (Phase 1D)', async () => {
+    const email = `apitest.mailfail.enum.${Date.now()}@cime.edu`;
+    const userHash = await bcrypt.hash('password123', 10);
+    const userId = uuidv4();
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 1)',
+        [userId, email, 'Enum Mailer User', userHash, 'user']
+    );
+    cleanupUserEmails.push(email);
+
+    mailer._simulatedFailure = true;
+    try {
+        // forgot-password must still return 200 with standard anti-enumeration message even when mailer fails
+        const forgotRes = await api('/auth/forgot-password', { method: 'POST', body: { email } });
+        assert.strictEqual(forgotRes.status, 200);
+        assert.strictEqual(forgotRes.json.message, 'If an account exists for that email, a reset link has been sent.');
+
+        // resend-verification must still return 200 with standard anti-enumeration message even when mailer fails
+        const resendRes = await api('/auth/resend-verification', { method: 'POST', body: { email } });
+        assert.strictEqual(resendRes.status, 200);
+        assert.strictEqual(resendRes.json.message, 'If the account is unverified, a fresh verification link has been sent.');
+    } finally {
+        mailer._simulatedFailure = false;
+    }
+});
+
+/* --------------------- REPORTS SUMMARY & RELEASE POLISH ---------------------- */
+test('reports: summary endpoint requires authentication and admin authorization', async () => {
+    // 1. Unauthenticated request -> 401
+    const unauth = await api('/reports/summary');
+    assert.strictEqual(unauth.status, 401);
+
+    // 2. Non-admin user request -> 403
+    const email = `apitest.repsum.user.${Date.now()}@cime.edu`;
+    await api('/users', { method: 'POST', token: p1bAdminToken, body: { email, password: 'secret123', role: 'user' } });
+    cleanupUserEmails.push(email);
+    const login = await api('/auth/login', { method: 'POST', body: { email, password: 'secret123' } });
+    assert.strictEqual(login.status, 200);
+
+    const nonAdmin = await api('/reports/summary', { token: login.json.token });
+    assert.strictEqual(nonAdmin.status, 403);
+
+    // 3. Admin request -> 200 OK
+    const adminRes = await api('/reports/summary', { token: p1bAdminToken });
+    assert.strictEqual(adminRes.status, 200);
+    assert.ok(Array.isArray(adminRes.json));
+
+    // Cleanup user
+    const users = await api('/users', { token: p1bAdminToken });
+    const target = users.json.find(u => u.email === email);
+    if (target) await api(`/users/${target.id}`, { method: 'DELETE', token: p1bAdminToken });
+    removeFrom(cleanupUserEmails, email);
+});
+
+test('reports: summary endpoint returns correct SQL-aggregated departmental metrics', async () => {
+    const studentEmail = `apitest.repsum.student.${Date.now()}@cime.edu`;
+    const sRes = await api('/students', {
+        method: 'POST',
+        token: p1bAdminToken,
+        body: {
+            name: 'Report Test Student',
+            email: studentEmail,
+            department: 'MCA',
+            semester: 'Semester 1',
+            status: 'active'
+        }
+    });
+    assert.strictEqual(sRes.status, 201);
+    const studentId = sRes.json.id;
+    cleanupStudentIds.push(studentId);
+
+    // Seed grade and attendance
+    await api(`/students/${studentId}/grades`, {
+        method: 'PUT',
+        token: p1bAdminToken,
+        body: { subject: 'Database Systems', score: 85 }
+    });
+    await api(`/students/${studentId}/attendance`, {
+        method: 'PUT',
+        token: p1bAdminToken,
+        body: { date: todayStr(), status: 'present' }
+    });
+
+    const summaryRes = await api('/reports/summary', { token: p1bAdminToken });
+    assert.strictEqual(summaryRes.status, 200);
+    assert.ok(Array.isArray(summaryRes.json));
+
+    const mcaSem1 = summaryRes.json.find(r => r.department === 'MCA' && r.semester === 'Semester 1');
+    assert.ok(mcaSem1, 'Expected summary row for MCA Semester 1');
+    assert.ok(mcaSem1.students >= 1);
+    assert.strictEqual(typeof mcaSem1.avgGrade, 'number');
+    assert.strictEqual(typeof mcaSem1.attendance, 'number');
+    assert.ok(mcaSem1.avgGrade > 0);
+    assert.ok(mcaSem1.attendance > 0);
+
+    // Cleanup student
+    await api(`/students/${studentId}`, { method: 'DELETE', token: p1bAdminToken });
+    removeFrom(cleanupStudentIds, studentId);
+});
+
+test('health: GET /health and /api/health return 200 JSON probe', async () => {
+    const rootBase = base.replace(/\/api$/, '');
+    const resRoot = await fetch(rootBase + '/health');
+    assert.strictEqual(resRoot.status, 200);
+    const dataRoot = await resRoot.json();
+    assert.strictEqual(dataRoot.status, 'ok');
+    assert.strictEqual(typeof dataRoot.uptime, 'number');
+    assert.ok(dataRoot.timestamp);
+
+    const resApi = await fetch(rootBase + '/api/health');
+    assert.strictEqual(resApi.status, 200);
+    const dataApi = await resApi.json();
+    assert.strictEqual(dataApi.status, 'ok');
+});
+
+test('frontend: dynamic API URL resolves localhost to 5000 and remote to Render', () => {
+    function resolveApiUrl(hostname) {
+        return (hostname === 'localhost' || hostname === '127.0.0.1')
+            ? 'http://localhost:5000/api'
+            : 'https://cime-backend.onrender.com/api';
+    }
+    assert.strictEqual(resolveApiUrl('localhost'), 'http://localhost:5000/api');
+    assert.strictEqual(resolveApiUrl('127.0.0.1'), 'http://localhost:5000/api');
+    assert.strictEqual(resolveApiUrl('cime-erp.vercel.app'), 'https://cime-backend.onrender.com/api');
+    assert.strictEqual(resolveApiUrl('cime.edu'), 'https://cime-backend.onrender.com/api');
 });

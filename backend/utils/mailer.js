@@ -16,9 +16,15 @@ const smtpConfigured = !!(process.env.SMTP_HOST && process.env.SMTP_USER && proc
 module.exports = {
     lastResetLink: null,
     lastVerificationLink: null,
+    _simulatedFailure: false,
 
     async _deliver({ to, subject, text, html, logLine }) {
-        if (process.env.NODE_ENV === 'test') return; // tests read the last*Link hooks directly
+        if (process.env.NODE_ENV === 'test') {
+            if (module.exports._simulatedFailure) {
+                return { delivered: false, error: 'Simulated mailer failure' };
+            }
+            return { delivered: true }; // tests read the last*Link hooks directly
+        }
         if (smtpConfigured) {
             try {
                 const transporter = nodemailer.createTransport({
@@ -34,21 +40,24 @@ module.exports = {
                     text,
                     html
                 });
+                return { delivered: true };
             } catch (error) {
                 // Never let a mail outage break the API: log it and still respond 200.
                 // Also print the link so local testing isn't blocked (e.g. Resend's
                 // sandbox only delivers to the account owner until a domain is verified).
                 console.error('[mailer] Failed to send email:', error.message);
                 if (logLine) console.log(logLine);
+                return { delivered: false, error: error.message };
             }
         } else {
             console.log(logLine);
+            return { delivered: true, simulated: true };
         }
     },
 
     async sendVerificationEmail({ to, verifyLink }) {
         module.exports.lastVerificationLink = verifyLink;
-        await this._deliver({
+        return await this._deliver({
             to,
             subject: 'Cohort ERP — Verify your email',
             text: `Welcome to Cohort ERP!\n\nConfirm your email by opening this link (valid for 24 hours):\n${verifyLink}\n\nIf you didn't create this account, you can ignore this email.`,
@@ -60,7 +69,7 @@ module.exports = {
     },
 
     async sendWelcomeEmail({ to, name }) {
-        await this._deliver({
+        return await this._deliver({
             to,
             subject: 'Welcome to Cohort ERP 🎓',
             text: `Hi ${name},\n\nYour Cohort ERP account is verified. You can now sign in at ${process.env.FRONTEND_URL || 'http://localhost:5000'}.`,
@@ -72,7 +81,7 @@ module.exports = {
 
     async sendPasswordResetEmail({ to, resetLink }) {
         module.exports.lastResetLink = resetLink;
-        await this._deliver({
+        return await this._deliver({
             to,
             subject: 'Cohort ERP — Reset your password',
             text: `You requested a password reset for your Cohort ERP account.\n\n` +

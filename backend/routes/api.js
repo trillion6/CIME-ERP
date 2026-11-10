@@ -9,6 +9,7 @@ const gradesCtrl = require('../controllers/gradesController');
 const userCtrl = require('../controllers/userController');
 const reportCtrl = require('../controllers/reportController');
 const auditCtrl = require('../controllers/auditController');
+const settingsCtrl = require('../controllers/settingsController');
 
 // Brute-force protection for the login endpoint (disabled while running the test suite)
 const loginLimiter = process.env.NODE_ENV === 'test'
@@ -47,16 +48,20 @@ router.put('/auth/password', loginLimiter, protect, authCtrl.changePassword);
 router.post('/auth/forgot-password', loginLimiter, authCtrl.forgotPassword);
 router.post('/auth/reset-password', loginLimiter, authCtrl.resetPassword);
 
+// High-speed aggregated dashboard metrics (replaces unpaginated student dump for dashboard)
+router.get('/dashboard/stats', protect, studentCtrl.getDashboardStats);
+
 router.route('/students')
     .get(protect, studentCtrl.getStudents)
     .post(protect, adminOnly, studentCtrl.createStudent);
 
 router.route('/students/:id')
+    .get(protect, studentCtrl.getStudentById)
     .put(protect, adminOnly, studentCtrl.updateStudent)
     .delete(protect, adminOnly, studentCtrl.deleteStudent);
 
-// Attendance & grades persistence (attendance open to any logged-in user, grades are admin-only)
-router.put('/students/:id/attendance', protect, attendanceCtrl.upsertAttendance);
+// Attendance & grades persistence (both attendance and grades are admin-only)
+router.put('/students/:id/attendance', protect, adminOnly, attendanceCtrl.upsertAttendance);
 router.put('/students/:id/grades', protect, adminOnly, gradesCtrl.upsertGrade);
 
 // User management (admin only, rate-limited)
@@ -69,6 +74,8 @@ router.put('/users/:id/password', protect, adminOnly, adminLimiter, userCtrl.res
 
 // Report exports (CSV / PDF)
 router.get('/reports/export', protect, adminOnly, reportCtrl.exportReport);
+// Departmental report summary for in-browser reports view
+router.get('/reports/summary', protect, adminOnly, reportCtrl.getReportSummary);
 // Printable classroom attendance sheet
 router.get('/reports/attendance-sheet', protect, adminOnly, reportCtrl.attendanceSheet);
 // Per-student report card (PDF)
@@ -76,5 +83,10 @@ router.get('/students/:id/report-card', protect, adminOnly, reportCtrl.studentRe
 
 // Audit trail (admin only)
 router.get('/audit', protect, adminOnly, auditCtrl.getAuditLogs);
+
+// Institutional settings (public branding, authenticated read, admin-only write)
+router.get('/settings/public', settingsCtrl.getPublicSettings);
+router.get('/settings/institution', protect, settingsCtrl.getSettings);
+router.put('/settings/institution', protect, adminOnly, adminLimiter, settingsCtrl.updateSettings);
 
 module.exports = router;

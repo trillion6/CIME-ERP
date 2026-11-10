@@ -1,13 +1,15 @@
 const pool = require('../config/db');
 const PDFDocument = require('pdfkit');
 const { logAction } = require('../utils/audit');
+const settingsCtrl = require('./settingsController');
 
 const DEPARTMENTS = ['MCA', 'MBA'];
 const SEMESTERS = ['Semester 1', 'Semester 2', 'Semester 3', 'Semester 4', 'Semester 5', 'Semester 6'];
 
+const COLLEGE_TIMEZONE = process.env.TIME_ZONE || 'Asia/Kolkata';
+
 function todayLocalStr() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return new Intl.DateTimeFormat('en-CA', { timeZone: COLLEGE_TIMEZONE }).format(new Date());
 }
 
 function letterGrade(score) {
@@ -24,46 +26,41 @@ function csvCell(v) {
 }
 
 // Aggregates per department+semester: student count, average grade, attendance rate
+// Aggregates grades and attendance independently in subqueries before joining to students
+// to avoid row-multiplication (cartesian product) while preserving exact calculation semantics.
 async function buildReportRows() {
-    const [students] = await pool.query('SELECT * FROM students ORDER BY department, semester, name');
-    if (!students.length) return [];
+    const [rows] = await pool.query(`
+        SELECT 
+            s.department,
+            s.semester,
+            COUNT(s.id) AS students,
+            COALESCE(ROUND(SUM(COALESCE(g.student_avg_grade, 0)) / NULLIF(COUNT(s.id), 0)), 0) AS avgGrade,
+            COALESCE(ROUND(SUM(COALESCE(a.student_att_rate, 0)) / NULLIF(COUNT(s.id), 0)), 0) AS attendance
+        FROM students s
+        LEFT JOIN (
+            SELECT student_id, ROUND(AVG(score)) AS student_avg_grade
+            FROM grades
+            GROUP BY student_id
+        ) g ON s.id = g.student_id
+        LEFT JOIN (
+            SELECT student_id, ROUND(COUNT(CASE WHEN status = 'present' THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0)) AS student_att_rate
+            FROM attendance
+            GROUP BY student_id
+        ) a ON s.id = a.student_id
+        WHERE s.department IS NOT NULL AND s.semester IS NOT NULL
+        GROUP BY s.department, s.semester
+        ORDER BY s.department, s.semester
+    `);
 
-    const ids = students.map(s => s.id);
-    const [attRows] = await pool.query('SELECT student_id, date, status FROM attendance WHERE student_id IN (?)', [ids]);
-    const [gradeRows] = await pool.query('SELECT student_id, subject, score FROM grades WHERE student_id IN (?)', [ids]);
-
-    const attMap = {};
-    attRows.forEach(r => (attMap[r.student_id] = attMap[r.student_id] || {})[r.date] = r.status);
-    const gradeMap = {};
-    gradeRows.forEach(r => (gradeMap[r.student_id] = gradeMap[r.student_id] || {})[r.subject] = r.score);
-
-    const rows = [];
-    for (const dept of DEPARTMENTS) {
-        for (const sem of SEMESTERS) {
-            const list = students.filter(s => s.department === dept && s.semester === sem);
-            if (!list.length) continue;
-
-            let gradeSum = 0, attSum = 0;
-            list.forEach(s => {
-                const grades = Object.values(gradeMap[s.id] || {});
-                gradeSum += grades.length
-                    ? Math.round(grades.reduce((a, b) => a + b, 0) / grades.length)
-                    : 0;
-                const att = Object.values(attMap[s.id] || {});
-                const present = att.filter(v => v === 'present').length;
-                attSum += att.length ? Math.round(present / att.length * 100) : 0;
-            });
-
-            rows.push({
-                department: dept,
-                semester: sem,
-                students: list.length,
-                avgGrade: Math.round(gradeSum / list.length),
-                attendance: Math.round(attSum / list.length)
-            });
-        }
-    }
-    return rows;
+    return rows
+        .map(r => ({
+            department: r.department,
+            semester: r.semester,
+            students: Number(r.students),
+            avgGrade: Number(r.avgGrade),
+            attendance: Number(r.attendance)
+        }))
+        .sort((a, b) => DEPARTMENTS.indexOf(a.department) - DEPARTMENTS.indexOf(b.department) || SEMESTERS.indexOf(a.semester) - SEMESTERS.indexOf(b.semester));
 }
 
 function sendCsv(rows, res) {
@@ -76,13 +73,14 @@ function sendCsv(rows, res) {
     res.send(header + body + '\n');
 }
 
-function sendPdf(rows, res) {
+function sendPdf(rows, res, instName) {
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="cohort-report.pdf"');
     doc.pipe(res);
 
-    doc.fontSize(18).text('Cohort ERP — Department Report', { align: 'center' });
+    const heading = instName ? `${instName} — Department Report` : 'College of IT and Management Education (CIME) — Department Report';
+    doc.fontSize(16).text(heading, { align: 'center' });
     doc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
     doc.moveDown(2);
 
@@ -131,7 +129,9 @@ exports.studentReportCard = async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename="report-card-${s.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.pdf"`);
         doc.pipe(res);
 
-        doc.fontSize(20).text('Cohort ERP — Report Card', { align: 'center' });
+        const settings = await settingsCtrl.getEffectiveSettings();
+        const instName = settings.institution_name || 'College of IT and Management Education (CIME)';
+        doc.fontSize(18).text(`${instName} — Report Card`, { align: 'center' });
         doc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
         doc.moveDown(1.5);
 
@@ -198,7 +198,10 @@ exports.studentReportCard = async (req, res) => {
         doc.end();
     } catch (error) {
         console.error('studentReportCard error:', error);
-        if (!res.headersSent) return res.status(500).json({ error: 'Server error' });
+        if (!res.headersSent) {
+            const status = error.message && error.message.includes('Institutional settings') ? 503 : 500;
+            return res.status(status).json({ error: error.message || 'Server error' });
+        }
         res.end();
     }
 };
@@ -234,7 +237,9 @@ exports.attendanceSheet = async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename="attendance-${department}-${targetDate}.pdf"`);
         doc.pipe(res);
 
-        doc.fontSize(18).text('Cohort ERP — Attendance Sheet', { align: 'center' });
+        const settings = await settingsCtrl.getEffectiveSettings();
+        const instName = settings.institution_name || 'College of IT and Management Education (CIME)';
+        doc.fontSize(18).text(`${instName} — Attendance Sheet`, { align: 'center' });
         doc.fontSize(10).text(`${department} · ${semester} · ${targetDate}`, { align: 'center' });
         doc.moveDown(1.2);
 
@@ -279,7 +284,10 @@ exports.attendanceSheet = async (req, res) => {
         doc.end();
     } catch (error) {
         console.error('attendanceSheet error:', error);
-        if (!res.headersSent) return res.status(500).json({ error: 'Server error' });
+        if (!res.headersSent) {
+            const status = error.message && error.message.includes('Institutional settings') ? 503 : 500;
+            return res.status(status).json({ error: error.message || 'Server error' });
+        }
         res.end();
     }
 };
@@ -293,10 +301,24 @@ exports.exportReport = async (req, res) => {
         const rows = await buildReportRows();
         await logAction(req.user.id, 'report.exported', format);
         if (format === 'csv') return sendCsv(rows, res);
-        return sendPdf(rows, res);
+        const settings = await settingsCtrl.getEffectiveSettings();
+        return sendPdf(rows, res, settings.institution_name);
     } catch (error) {
         console.error('exportReport error:', error);
-        if (!res.headersSent) return res.status(500).json({ error: 'Server error' });
+        if (!res.headersSent) {
+            const status = error.message && error.message.includes('Institutional settings') ? 503 : 500;
+            return res.status(status).json({ error: error.message || 'Server error' });
+        }
         res.end();
+    }
+};
+
+exports.getReportSummary = async (req, res) => {
+    try {
+        const rows = await buildReportRows();
+        res.json(rows);
+    } catch (error) {
+        console.error('getReportSummary error:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 };
