@@ -14,6 +14,13 @@ const AVATAR_GRADIENTS = [
   'linear-gradient(135deg,#46c6fc,#46f6d5)'
 ];
 
+function safeAvatar(avatar) {
+  if (typeof avatar === 'string' && AVATAR_GRADIENTS.includes(avatar.trim())) {
+    return avatar.trim();
+  }
+  return 'var(--grad-primary)';
+}
+
 function tokenPayload(token){
   if(!token) return null;
   try {
@@ -793,7 +800,7 @@ function personRowHTML(s, compact){
   const letter = letterGrade(avg);
   return `
   <div class="person-row" data-id="${s.id}">
-    <div class="avatar" style="background:${esc(s.avatar) || 'var(--grad-primary)'}">${initials(s.name)}</div>
+    <div class="avatar" style="background:${safeAvatar(s.avatar)}">${initials(s.name)}</div>
     <div class="person-info">
       <div class="person-name">${esc(s.name)}</div>
       <div class="person-meta">${esc(s.email)}</div>
@@ -1070,7 +1077,7 @@ function renderAttendanceView(){
     const rec = s.attendance && s.attendance[state.attendanceDate];
     return `
     <div class="person-row" data-att-id="${s.id}">
-      <div class="avatar" style="background:${esc(s.avatar) || 'var(--grad-primary)'}">${initials(s.name)}</div>
+      <div class="avatar" style="background:${safeAvatar(s.avatar)}">${initials(s.name)}</div>
       <div class="person-info">
         <div class="person-name">${esc(s.name)}</div>
         <div class="person-meta">${esc(s.department)} · ${esc(s.semester)}</div>
@@ -1206,7 +1213,7 @@ function renderResultsView(){
     const avg = studentAvgGrade(s);
     return `
     <tr>
-      <td><div style="display:flex;align-items:center;gap:10px;"><div class="avatar" style="width:32px;height:32px;font-size:11.5px;background:${esc(s.avatar) || 'var(--grad-primary)'}">${initials(s.name)}</div>${esc(s.name)}</div></td>
+      <td><div style="display:flex;align-items:center;gap:10px;"><div class="avatar" style="width:32px;height:32px;font-size:11.5px;background:${safeAvatar(s.avatar)}">${initials(s.name)}</div>${esc(s.name)}</div></td>
       <td>${esc(s.department)} · ${esc(s.semester)}</td>
       <td><input type="number" min="0" max="100" class="grade-input" value="${score}" onchange="updateGrade('${s.id}','${subj}',this.value)"></td>
       <td><span class="grade-badge" style="background:${gradeColor(letter)};width:30px;height:30px;font-size:12px;">${letter}</span></td>

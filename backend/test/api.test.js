@@ -2081,3 +2081,210 @@ test('frontend: apiCall implementation handles 401 login, session expiration, HT
     const successRes = await testApiCall('/dashboard/stats', 'GET', null, mockSuccess, state, windowMock);
     assert.deepStrictEqual(successRes, { count: 42 });
 });
+
+/* --------------------- PHASE 2C AVATAR CSS INJECTION TESTS ---------------------- */
+test('avatar: each approved gradient is accepted on student creation and updates', async () => {
+    const studentCtrl = require('../controllers/studentController');
+    const { APPROVED_AVATAR_GRADIENTS } = studentCtrl;
+    assert.strictEqual(APPROVED_AVATAR_GRADIENTS.length, 6);
+
+    for (let i = 0; i < APPROVED_AVATAR_GRADIENTS.length; i++) {
+        const gradient = APPROVED_AVATAR_GRADIENTS[i];
+        const email = `apitest.avatar.${i}.${Date.now()}@cime.edu`;
+
+        // 1. Creation with approved gradient
+        const createRes = await api('/students', {
+            method: 'POST',
+            token: p1bAdminToken,
+            body: {
+                name: `Avatar Test Student ${i}`,
+                email,
+                department: 'MCA',
+                semester: 'Semester 1',
+                status: 'active',
+                avatar: gradient
+            }
+        });
+        assert.strictEqual(createRes.status, 201);
+        assert.strictEqual(createRes.json.avatar, gradient);
+        const studentId = createRes.json.id;
+        cleanupStudentIds.push(studentId);
+
+        // 2. Fetch student and confirm stored avatar
+        const getRes = await api(`/students/${studentId}`, { token: p1bAdminToken });
+        assert.strictEqual(getRes.status, 200);
+        assert.strictEqual(getRes.json.avatar, gradient);
+
+        // 3. Update student with another approved gradient (wrap-around)
+        const nextGradient = APPROVED_AVATAR_GRADIENTS[(i + 1) % APPROVED_AVATAR_GRADIENTS.length];
+        const updateRes = await api(`/students/${studentId}`, {
+            method: 'PUT',
+            token: p1bAdminToken,
+            body: {
+                name: `Avatar Test Student ${i} Updated`,
+                email,
+                department: 'MCA',
+                semester: 'Semester 1',
+                status: 'active',
+                avatar: nextGradient
+            }
+        });
+        assert.strictEqual(updateRes.status, 200);
+
+        const getUpdated = await api(`/students/${studentId}`, { token: p1bAdminToken });
+        assert.strictEqual(getUpdated.json.avatar, nextGradient);
+
+        // Cleanup
+        await api(`/students/${studentId}`, { method: 'DELETE', token: p1bAdminToken });
+        removeFrom(cleanupStudentIds, studentId);
+    }
+});
+
+test('avatar: arbitrary CSS, position: fixed, semicolons, and URLs are rejected on create and update', async () => {
+    const maliciousPayloads = [
+        { desc: 'position: fixed injection', val: 'red; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 99999;' },
+        { desc: 'semicolon CSS declaration injection', val: 'linear-gradient(135deg,#6d5df6,#46a0fc); display: none;' },
+        { desc: 'URL-based CSS injection', val: 'url(https://attacker.example/leak.png)' },
+        { desc: 'arbitrary color keyword', val: 'red' },
+        { desc: 'arbitrary hex color', val: '#ff0000' },
+        { desc: 'unapproved gradient parameters', val: 'linear-gradient(to right, red, yellow)' },
+        { desc: 'CSS expression / script vector', val: 'expression(alert(1))' }
+    ];
+
+    // Create a base student for update tests
+    const baseEmail = `apitest.avatar.vuln.${Date.now()}@cime.edu`;
+    const baseCreate = await api('/students', {
+        method: 'POST',
+        token: p1bAdminToken,
+        body: {
+            name: 'Malicious Avatar Probe',
+            email: baseEmail,
+            department: 'MCA',
+            semester: 'Semester 1',
+            status: 'active'
+        }
+    });
+    assert.strictEqual(baseCreate.status, 201);
+    const targetId = baseCreate.json.id;
+    cleanupStudentIds.push(targetId);
+
+    try {
+        for (const { desc, val } of maliciousPayloads) {
+            // 1. Creation must reject with 400
+            const createFail = await api('/students', {
+                method: 'POST',
+                token: p1bAdminToken,
+                body: {
+                    name: `Attack Attempt`,
+                    email: `attack.${Date.now()}.${Math.random()}@cime.edu`,
+                    department: 'MCA',
+                    semester: 'Semester 1',
+                    status: 'active',
+                    avatar: val
+                }
+            });
+            assert.strictEqual(createFail.status, 400, `Creation should reject ${desc}`);
+            assert.ok(createFail.json.error.includes('Avatar must be an approved gradient style'));
+
+            // 2. Update must reject with 400
+            const updateFail = await api(`/students/${targetId}`, {
+                method: 'PUT',
+                token: p1bAdminToken,
+                body: {
+                    name: 'Malicious Avatar Probe',
+                    email: baseEmail,
+                    department: 'MCA',
+                    semester: 'Semester 1',
+                    status: 'active',
+                    avatar: val
+                }
+            });
+            assert.strictEqual(updateFail.status, 400, `Update should reject ${desc}`);
+            assert.ok(updateFail.json.error.includes('Avatar must be an approved gradient style'));
+        }
+    } finally {
+        await api(`/students/${targetId}`, { method: 'DELETE', token: p1bAdminToken });
+        removeFrom(cleanupStudentIds, targetId);
+    }
+});
+
+test('avatar: existing student records without avatar or with legacy values remain readable and safe', async () => {
+    const studentCtrl = require('../controllers/studentController');
+    const { sanitizeAvatar, APPROVED_AVATAR_GRADIENTS } = studentCtrl;
+
+    // Unit test controller sanitization helper
+    assert.strictEqual(sanitizeAvatar(null), null);
+    assert.strictEqual(sanitizeAvatar(undefined), null);
+    assert.strictEqual(sanitizeAvatar(''), null);
+    assert.strictEqual(sanitizeAvatar('red; position: fixed;'), null);
+    assert.strictEqual(sanitizeAvatar('url(http://evil.com)'), null);
+    assert.strictEqual(sanitizeAvatar(APPROVED_AVATAR_GRADIENTS[0]), APPROVED_AVATAR_GRADIENTS[0]);
+
+    // Insert directly into DB a student with an unapproved/legacy avatar string
+    const legacyId = uuidv4();
+    const legacyEmail = `legacy.avatar.${Date.now()}@cime.edu`;
+    await pool.query(
+        'INSERT INTO students (id, name, email, department, semester, enroll_date, status, avatar) VALUES (?,?,?,?,?,?,?,?)',
+        [legacyId, 'Legacy Student', legacyEmail, 'MCA', 'Semester 1', '2026-01-15', 'active', 'malicious-legacy-value; position: fixed;']
+    );
+    cleanupStudentIds.push(legacyId);
+
+    try {
+        // Read via GET /students/:id — must sanitize the legacy value to null
+        const resSingle = await api(`/students/${legacyId}`, { token: p1bAdminToken });
+        assert.strictEqual(resSingle.status, 200);
+        assert.strictEqual(resSingle.json.avatar, null, 'Legacy/malformed DB value must be sanitized to null');
+
+        // Read via GET /students (full list) — must sanitize
+        const resList = await api('/students', { token: p1bAdminToken });
+        assert.strictEqual(resList.status, 200);
+        const found = resList.json.find(s => s.id === legacyId);
+        assert.ok(found);
+        assert.strictEqual(found.avatar, null);
+
+        // Read via GET /dashboard/stats — must sanitize in recentStudents
+        const resDash = await api('/dashboard/stats', { token: p1bAdminToken });
+        assert.strictEqual(resDash.status, 200);
+        const dashFound = resDash.json.recentStudents.find(s => s.id === legacyId);
+        if (dashFound) {
+            assert.strictEqual(dashFound.avatar, null);
+        }
+    } finally {
+        await pool.query('DELETE FROM students WHERE id = ?', [legacyId]);
+        removeFrom(cleanupStudentIds, legacyId);
+    }
+});
+
+test('avatar: frontend safeAvatar helper strictly allows approved gradients and falls back safely', () => {
+    const AVATAR_GRADIENTS = [
+        'linear-gradient(135deg,#6d5df6,#46a0fc)',
+        'linear-gradient(135deg,#1fcfa8,#63e6c4)',
+        'linear-gradient(135deg,#ff6b81,#ffa07a)',
+        'linear-gradient(135deg,#ffb648,#ffd76b)',
+        'linear-gradient(135deg,#a06df6,#f646d1)',
+        'linear-gradient(135deg,#46c6fc,#46f6d5)'
+    ];
+    function safeAvatar(avatar) {
+        if (typeof avatar === 'string' && AVATAR_GRADIENTS.includes(avatar.trim())) {
+            return avatar.trim();
+        }
+        return 'var(--grad-primary)';
+    }
+
+    // 1. Approved gradients are preserved identically
+    AVATAR_GRADIENTS.forEach(g => {
+        assert.strictEqual(safeAvatar(g), g);
+    });
+
+    // 2. Null, undefined, empty, whitespace fall back to default
+    assert.strictEqual(safeAvatar(null), 'var(--grad-primary)');
+    assert.strictEqual(safeAvatar(undefined), 'var(--grad-primary)');
+    assert.strictEqual(safeAvatar(''), 'var(--grad-primary)');
+    assert.strictEqual(safeAvatar('   '), 'var(--grad-primary)');
+
+    // 3. Injections fall back to default
+    assert.strictEqual(safeAvatar('red; position: fixed; top: 0;'), 'var(--grad-primary)');
+    assert.strictEqual(safeAvatar('url(http://evil.com/leak.png)'), 'var(--grad-primary)');
+    assert.strictEqual(safeAvatar('linear-gradient(135deg,#6d5df6,#46a0fc); background: red;'), 'var(--grad-primary)');
+    assert.strictEqual(safeAvatar('<script>alert(1)</script>'), 'var(--grad-primary)');
+});

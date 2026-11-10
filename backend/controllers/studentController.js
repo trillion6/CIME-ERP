@@ -12,6 +12,22 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // Spaces and dashes are ignored (e.g. "+91 98765 43210" is valid).
 const PHONE_RE = /^(\+\d{1,3})?\d{10}$/;
 
+const APPROVED_AVATAR_GRADIENTS = [
+    'linear-gradient(135deg,#6d5df6,#46a0fc)',
+    'linear-gradient(135deg,#1fcfa8,#63e6c4)',
+    'linear-gradient(135deg,#ff6b81,#ffa07a)',
+    'linear-gradient(135deg,#ffb648,#ffd76b)',
+    'linear-gradient(135deg,#a06df6,#f646d1)',
+    'linear-gradient(135deg,#46c6fc,#46f6d5)'
+];
+
+function sanitizeAvatar(avatar) {
+    if (typeof avatar === 'string' && APPROVED_AVATAR_GRADIENTS.includes(avatar.trim())) {
+        return avatar.trim();
+    }
+    return null;
+}
+
 function normalizePhone(p) {
     return String(p).replace(/[\s-]/g, '');
 }
@@ -40,6 +56,11 @@ function validateStudent(body) {
     if (body.semester && !SEMESTERS.includes(body.semester)) errors.push('Invalid semester');
     if (body.status && !STATUSES.includes(body.status)) errors.push('Status must be active or inactive');
     if (body.enroll_date && !DATE_RE.test(body.enroll_date)) errors.push('Invalid enrollment date');
+    if (body.avatar != null && body.avatar !== '') {
+        if (typeof body.avatar !== 'string' || !APPROVED_AVATAR_GRADIENTS.includes(body.avatar.trim())) {
+            errors.push('Avatar must be an approved gradient style');
+        }
+    }
     return errors;
 }
 
@@ -56,6 +77,9 @@ async function attachDetails(rows) {
     rows.forEach(s => {
         s.attendance = attMap[s.id] || {};
         s.grades = gradeMap[s.id] || {};
+        if (s.avatar !== undefined) {
+            s.avatar = sanitizeAvatar(s.avatar);
+        }
     });
     return rows;
 }
@@ -106,6 +130,7 @@ exports.createStudent = async (req, res) => {
 
         const id = uuidv4();
         const { name, email, phone, gender, department, semester, enroll_date, status, avatar } = req.body;
+        const safeAvatar = sanitizeAvatar(avatar);
         const sql = `INSERT INTO students (id, name, email, phone, gender, department, semester, enroll_date, status, avatar) VALUES (?,?,?,?,?,?,?,?,?,?)`;
         await pool.query(sql, [
             id,
@@ -117,10 +142,10 @@ exports.createStudent = async (req, res) => {
             semester || null,
             enroll_date || null,
             status || 'active',
-            avatar || null
+            safeAvatar
         ]);
         await logAction(req.user.id, 'student.created', String(name).trim());
-        res.status(201).json({ id, ...req.body, email: String(email).trim().toLowerCase() });
+        res.status(201).json({ id, ...req.body, email: String(email).trim().toLowerCase(), avatar: safeAvatar });
     } catch (error) {
         if (error.code === 'ER_DUP_ENTRY') {
             return res.status(409).json({ error: 'A student with this email already exists' });
@@ -137,6 +162,7 @@ exports.updateStudent = async (req, res) => {
         if (errors.length) return res.status(400).json({ error: errors.join('; ') });
 
         const { name, email, phone, gender, department, semester, enroll_date, status, avatar } = req.body;
+        const safeAvatar = sanitizeAvatar(avatar);
         const sql = `UPDATE students SET name=?, email=?, phone=?, gender=?, department=?, semester=?, enroll_date=?, status=?, avatar=? WHERE id=?`;
         const [result] = await pool.query(sql, [
             String(name).trim(),
@@ -147,7 +173,7 @@ exports.updateStudent = async (req, res) => {
             semester || null,
             enroll_date || null,
             status || 'active',
-            avatar || null,
+            safeAvatar,
             id
         ]);
         if (result.affectedRows === 0) return res.status(404).json({ error: 'Student not found' });
@@ -274,7 +300,7 @@ exports.getDashboardStats = async (req, res) => {
                 semester: s.semester,
                 enroll_date: s.enroll_date,
                 status: s.status,
-                avatar: s.avatar,
+                avatar: sanitizeAvatar(s.avatar),
                 avgGrade: Number(s.avgGrade) || 0
             }))
         });
@@ -283,3 +309,6 @@ exports.getDashboardStats = async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 };
+
+exports.APPROVED_AVATAR_GRADIENTS = APPROVED_AVATAR_GRADIENTS;
+exports.sanitizeAvatar = sanitizeAvatar;
