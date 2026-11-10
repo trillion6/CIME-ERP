@@ -1004,7 +1004,11 @@
 <div class="toast-wrap" id="toastWrap"></div>
 
 <script>
-  window.COHORT_CONFIG = { apiUrl: 'https://cime-backend.onrender.com/api' };
+  window.COHORT_CONFIG = {
+    apiUrl: (typeof window !== 'undefined' && window.location && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
+      ? 'http://localhost:5000/api'
+      : 'https://cime-backend.onrender.com/api'
+  };
 </script>
 <script src="script.js"></script>
 </body>

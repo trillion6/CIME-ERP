@@ -367,13 +367,14 @@ function buildThemeControls(){
   buildThemeMenu(document.getElementById('themeMenu'));
 }
 
-/* Institution settings (admin) — persisted locally, defaults restored via Reset */
+/* Institution settings (admin) — persisted in database via /api/settings/institution with client-side cache */
 const INST_DEFAULTS = {
   inst_name: 'College of IT and Management Education (CIME)',
   inst_year: '2026 – 2027',
   inst_tz: 'Asia/Kolkata',
   inst_email: 'admin@cime.edu'
 };
+
 /* Auto-grow the institution-name textarea so it matches single-line inputs
    when short, and only expands when the text wraps to more lines. */
 function autoGrowTextarea(el){
@@ -381,29 +382,116 @@ function autoGrowTextarea(el){
   el.style.height = 'auto';
   el.style.height = Math.max(45, el.scrollHeight) + 'px';
 }
-function loadInstitutionSettings(){
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem('institution') || '{}'); } catch(e){}
-  Object.keys(INST_DEFAULTS).forEach(id => {
-    const el = document.getElementById(id);
-    if(el) el.value = (saved[id] != null ? saved[id] : INST_DEFAULTS[id]);
-    if(id === 'inst_name') autoGrowTextarea(el);
-  });
+
+/* Load public branding from GET /api/settings/public before authentication */
+async function loadPublicBranding(){
+  try {
+    const res = await fetch(`${API_URL}/settings/public`);
+    if(res.ok){
+      const data = await res.json();
+      if(data && data.institution_name){
+        const el = document.querySelector('.cb-college-name');
+        if(el) el.textContent = data.institution_name;
+      }
+    }
+  } catch(e){
+    // Graceful offline fallback to bundled template branding
+  }
 }
-function saveInstitution(){
-  const data = {};
-  Object.keys(INST_DEFAULTS).forEach(id => {
-    const el = document.getElementById(id);
-    if(el) data[id] = el.value.trim();
-  });
-  if(!data.inst_name){ showToast('Institution name is required.', 'error'); return; }
-  localStorage.setItem('institution', JSON.stringify(data));
-  showToast('Institution settings saved.', 'success');
+
+async function loadInstitutionSettings(){
+  // 1. Populate immediately from client-side cache or default values to prevent layout flash
+  let cached = {};
+  try { cached = JSON.parse(localStorage.getItem('cached_institution_settings') || '{}'); } catch(e){}
+
+  function populateForm(data){
+    const mapping = {
+      inst_name: data.institution_name || data.inst_name,
+      inst_year: data.academic_year || data.inst_year,
+      inst_tz: data.time_zone || data.inst_tz,
+      inst_email: data.contact_email || data.inst_email
+    };
+    Object.keys(INST_DEFAULTS).forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.value = (mapping[id] != null ? mapping[id] : INST_DEFAULTS[id]);
+      if(id === 'inst_name') autoGrowTextarea(el);
+    });
+  }
+
+  populateForm(cached);
+
+  // 2. If authenticated, fetch authoritative settings from backend database
+  if (state.token) {
+    try {
+      const data = await apiCall('/settings/institution');
+      if (data && data.institution_name) {
+        populateForm(data);
+        localStorage.setItem('cached_institution_settings', JSON.stringify({
+          institution_name: data.institution_name,
+          academic_year: data.academic_year,
+          time_zone: data.time_zone,
+          contact_email: data.contact_email
+        }));
+        const brandingEl = document.querySelector('.cb-college-name');
+        if (brandingEl) brandingEl.textContent = data.institution_name;
+      }
+    } catch (err) {
+      console.warn('Failed to load authoritative settings from database:', err.message);
+    }
+  }
 }
-function resetInstitution(){
-  localStorage.removeItem('institution');
-  loadInstitutionSettings();
-  showToast('Institution settings reset to defaults.', 'info');
+
+async function saveInstitution(){
+  const nameEl = document.getElementById('inst_name');
+  const yearEl = document.getElementById('inst_year');
+  const tzEl = document.getElementById('inst_tz');
+  const emailEl = document.getElementById('inst_email');
+
+  const institution_name = nameEl ? nameEl.value.trim() : '';
+  const academic_year = yearEl ? yearEl.value.trim() : '';
+  const time_zone = tzEl ? tzEl.value.trim() : '';
+  const contact_email = emailEl ? emailEl.value.trim() : '';
+
+  if(!institution_name){ showToast('Institution name is required.', 'error'); return; }
+  if(!academic_year){ showToast('Academic year is required.', 'error'); return; }
+  if(!time_zone){ showToast('Time zone is required.', 'error'); return; }
+  if(!contact_email){ showToast('Contact email is required.', 'error'); return; }
+
+  const saveBtn = document.querySelector('#view-settings button.btn-primary');
+  if(saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+  try {
+    const payload = { institution_name, academic_year, time_zone, contact_email };
+    const result = await apiCall('/settings/institution', 'PUT', payload);
+    localStorage.setItem('cached_institution_settings', JSON.stringify(payload));
+    
+    const brandingEl = document.querySelector('.cb-college-name');
+    if(brandingEl) brandingEl.textContent = institution_name;
+
+    showToast(result.message || 'Institution settings saved to database.', 'success');
+  } catch(err){
+    showToast(err.message || 'Failed to save settings.', 'error');
+  } finally {
+    if(saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
+  }
+}
+
+async function resetInstitution(){
+  if(!confirm('Reset institution settings to CIME defaults in database?')) return;
+  try {
+    const payload = {
+      institution_name: INST_DEFAULTS.inst_name,
+      academic_year: INST_DEFAULTS.inst_year,
+      time_zone: INST_DEFAULTS.inst_tz,
+      contact_email: INST_DEFAULTS.inst_email
+    };
+    const result = await apiCall('/settings/institution', 'PUT', payload);
+    localStorage.setItem('cached_institution_settings', JSON.stringify(payload));
+    await loadInstitutionSettings();
+    showToast('Institution settings reset to defaults.', 'info');
+  } catch(err){
+    showToast(err.message || 'Failed to reset settings.', 'error');
+  }
 }
 
 function closeThemeMenu(){ document.querySelectorAll('.theme-menu').forEach(m => m.classList.remove('open')); }
@@ -449,7 +537,8 @@ document.documentElement.setAttribute('data-theme', resolveTheme(themePref));
 document.documentElement.setAttribute('data-accent', accentPref);
 buildThemeControls();
 renderThemeMenu();
-loadInstitutionSettings(); // sync the login banner with saved institution details
+loadPublicBranding(); // sync pre-login campus banner from public API
+loadInstitutionSettings(); // sync the settings with saved institution details
 
 
 /* ============================================================
@@ -478,8 +567,20 @@ function closeSidebarMobile(){
 }
 
 /* ============================================================
-   FETCH DATA
+   FETCH DATA & DASHBOARD METRICS
 ============================================================ */
+// Fast aggregate metrics for the dashboard (< 1 KB payload, < 15ms query)
+async function loadDashboardStats() {
+    try {
+        const stats = await apiCall('/dashboard/stats');
+        state.dashboardStats = stats;
+        renderDashboard();
+    } catch (err) {
+        console.error('loadDashboardStats error:', err);
+    }
+}
+
+// Full student fetch retained for fallback and backward-compatibility
 async function fetchStudents() {
     try {
         state.students = await apiCall('/students');
@@ -506,20 +607,28 @@ async function fetchStudents() {
 let attendanceChartInst=null, deptChartInst=null;
 
 function computeStats(){
-  const mcaStudents = state.students.filter(s=>s.department==='MCA');
-  const mbaStudents = state.students.filter(s=>s.department==='MBA');
+  if (state.dashboardStats) {
+    return {
+      totalMCA: state.dashboardStats.totalMCA || 0,
+      totalMBA: state.dashboardStats.totalMBA || 0,
+      mcaAttToday: state.dashboardStats.mcaAttToday || 0,
+      mbaAttToday: state.dashboardStats.mbaAttToday || 0
+    };
+  }
+  const mcaStudents = (state.students || []).filter(s=>s.department==='MCA');
+  const mbaStudents = (state.students || []).filter(s=>s.department==='MBA');
   const totalMCA = mcaStudents.length;
   const totalMBA = mbaStudents.length;
   
   let mcaAttToday = 0;
   mcaStudents.forEach(s=>{
-    const rec = s.attendance[state.attendanceDate];
+    const rec = s.attendance && s.attendance[state.attendanceDate];
     if(rec==='present') mcaAttToday++;
   });
   
   let mbaAttToday = 0;
   mbaStudents.forEach(s=>{
-    const rec = s.attendance[state.attendanceDate];
+    const rec = s.attendance && s.attendance[state.attendanceDate];
     if(rec==='present') mbaAttToday++;
   });
   
@@ -545,19 +654,29 @@ function renderStatCards(){
       <div class="stat-label">${c.label}</div>
     </div>
   `).join('');
-  document.getElementById('navStudentCount').textContent = state.students.length;
+  document.getElementById('navStudentCount').textContent = state.dashboardStats
+    ? (state.dashboardStats.totalStudents || state.dashboardStats.totalActive)
+    : (state.students || []).length;
 }
 
 function renderAttendanceChart(){
   const ctx = document.getElementById('attendanceChart');
   if(typeof Chart === 'undefined') return; // charts are optional — don't break the dashboard if Chart.js is unavailable
   const labels = []; const data = [];
-  for(let i=6;i>=0;i--){
-    const d = dateMinus(i);
-    labels.push(new Date(d).toLocaleDateString('en-US',{weekday:'short'}));
-    let present=0, total=0;
-    state.students.forEach(s=>{ const r=s.attendance[d]; if(r){total++; if(r==='present') present++;} });
-    data.push(total? Math.round(present/total*100) : 0);
+
+  if (state.dashboardStats && Array.isArray(state.dashboardStats.attendanceTrend)) {
+    state.dashboardStats.attendanceTrend.forEach(t => {
+      labels.push(new Date(t.date).toLocaleDateString('en-US', { weekday: 'short' }));
+      data.push(t.rate);
+    });
+  } else {
+    for(let i=6;i>=0;i--){
+      const d = dateMinus(i);
+      labels.push(new Date(d).toLocaleDateString('en-US',{weekday:'short'}));
+      let present=0, total=0;
+      (state.students || []).forEach(s=>{ const r=s.attendance && s.attendance[d]; if(r){total++; if(r==='present') present++;} });
+      data.push(total? Math.round(present/total*100) : 0);
+    }
   }
   
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -592,8 +711,10 @@ function renderAttendanceChart(){
 function renderDeptChart(){
   const ctx = document.getElementById('deptChart');
   if(typeof Chart === 'undefined') return; // charts are optional — don't break the dashboard if Chart.js is unavailable
-  const buckets = {MCA:0, MBA:0};
-  state.students.forEach(s=>{ buckets[s.department]++; });
+  const buckets = state.dashboardStats
+    ? { MCA: state.dashboardStats.totalMCA || 0, MBA: state.dashboardStats.totalMBA || 0 }
+    : { MCA: (state.students || []).filter(s => s.department === 'MCA').length, MBA: (state.students || []).filter(s => s.department === 'MBA').length };
+
   const accent = accentColors();
   const colors = {MCA: accent.primary, MBA: accent.secondary};
   if(deptChartInst) deptChartInst.destroy();
@@ -608,6 +729,7 @@ function renderDeptChart(){
 }
 
 function studentAvgGrade(s){
+  if(typeof s.avgGrade === 'number') return s.avgGrade;
   if(!s.grades) return 0;
   const vals = SUBJECTS.map(su=>s.grades[su] || 0);
   return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
@@ -621,14 +743,19 @@ function studentAttendanceRate(s){
 }
 
 function renderRecentStudents(){
-  const recent = [...state.students].sort((a,b)=> (b.enroll_date||'').localeCompare(a.enroll_date||'')).slice(0,5);
+  let recent = [];
+  if (state.dashboardStats && Array.isArray(state.dashboardStats.recentStudents) && state.dashboardStats.recentStudents.length) {
+    recent = state.dashboardStats.recentStudents;
+  } else if (state.students && state.students.length) {
+    recent = [...state.students].sort((a,b)=> (b.enroll_date||'').localeCompare(a.enroll_date||'')).slice(0,5);
+  }
   document.getElementById('recentStudentsList').innerHTML = recent.map(s=>personRowHTML(s, true)).join('') || emptyRow();
 }
 
 function emptyRow(){ return `<div class="empty-state"><p>No data found.</p></div>`; }
 
 function personRowHTML(s, compact){
-  const avg = studentAvgGrade(s);
+  const avg = typeof s.avgGrade === 'number' ? s.avgGrade : studentAvgGrade(s);
   const letter = letterGrade(avg);
   return `
   <div class="person-row" data-id="${s.id}">
@@ -829,8 +956,9 @@ async function submitStudentForm(){
       } else {
           await apiCall('/students', 'POST', payload);
           showToast('New student added.', 'success');
-      }      closeStudentModal();
-      await fetchStudents();
+      }
+      closeStudentModal();
+      await loadDashboardStats();
       fetchStudentsPage();
   } catch(err) {
       showToast(err.message, 'error');
@@ -842,7 +970,7 @@ async function submitStudentForm(){
 /* Delete */
 function openDeleteModal(id){
   state.deletingId = id;
-  const s = state.students.find(x=>x.id===id);
+  const s = (state.pageStudents || []).find(x=>x.id===id) || (state.students || []).find(x=>x.id===id) || { name: 'this student' };
   document.getElementById('deleteModalText').textContent = `Remove ${s.name} from the system? This action can't be undone.`;
   document.getElementById('deleteModalBackdrop').classList.add('open');
 }
@@ -854,7 +982,7 @@ async function confirmDelete(){
         await apiCall(`/students/${state.deletingId}`, 'DELETE');
         showToast('Student removed.', 'success');
         closeDeleteModal();
-        await fetchStudents();
+        await loadDashboardStats();
         fetchStudentsPage();
     } catch(err) {
         showToast(err.message, 'error');
@@ -866,6 +994,27 @@ async function confirmDelete(){
 /* ============================================================
    ATTENDANCE VIEW
 ============================================================ */
+async function loadAttendanceClass() {
+  const dept = document.getElementById('attDeptFilter').value;
+  const sem = document.getElementById('attSemFilter').value;
+  if(!dept || !sem) {
+    state.attClassStudents = [];
+    renderAttendanceView();
+    return;
+  }
+  try {
+    const students = await apiCall(`/students?department=${encodeURIComponent(dept)}&semester=${encodeURIComponent(sem)}`);
+    state.attClassStudents = (students || []).map(s => ({
+      ...s,
+      attendance: s.attendance || {},
+      grades: s.grades || {}
+    }));
+    renderAttendanceView();
+  } catch(err) {
+    showToast('Failed to load class attendance: ' + err.message, 'error');
+  }
+}
+
 function renderAttendanceView(){
   document.getElementById('attDate').value = state.attendanceDate;
   const dept = document.getElementById('attDeptFilter').value;
@@ -879,7 +1028,9 @@ function renderAttendanceView(){
     return;
   }
   
-  const list = state.students.filter(s=> s.department===dept && s.semester===sem);
+  const list = (state.attClassStudents && state.attClassStudents.length)
+    ? state.attClassStudents
+    : (state.students || []).filter(s=> s.department===dept && s.semester===sem);
   
   container.innerHTML = list.map(s=>{
     const rec = s.attendance && s.attendance[state.attendanceDate];
@@ -901,7 +1052,7 @@ function renderAttendanceView(){
 }
 
 async function setAttMark(id, mark){
-  const s = state.students.find(x=>x.id===id);
+  const s = (state.attClassStudents || []).find(x=>x.id===id) || (state.students || []).find(x=>x.id===id);
   if(!s) return;
   if(!s.attendance) s.attendance = {};
   const prev = s.attendance[state.attendanceDate];
@@ -935,11 +1086,11 @@ document.getElementById('attDate').addEventListener('change', (e)=>{
   state.attendanceDate = e.target.value || todayISO();
   renderAttendanceView();
 });
-document.getElementById('attDeptFilter').addEventListener('change', renderAttendanceView);
-document.getElementById('attSemFilter').addEventListener('change', renderAttendanceView);
+document.getElementById('attDeptFilter').addEventListener('change', loadAttendanceClass);
+document.getElementById('attSemFilter').addEventListener('change', loadAttendanceClass);
 async function saveAttendance(){
   showToast('Attendance saved for ' + state.attendanceDate + '.', 'success');
-  await fetchStudents();
+  loadDashboardStats();
 }
 
 /* Printable attendance sheet (admin only) */
@@ -975,13 +1126,38 @@ async function downloadAttendanceSheet(){
 /* ============================================================
    RESULTS VIEW (Formerly Grades)
 ============================================================ */
+async function loadResultsClass() {
+  const dept = document.getElementById('resDeptFilter').value;
+  const sem = document.getElementById('resSemFilter').value;
+  if (dept || sem) {
+    const params = new URLSearchParams();
+    if (dept) params.set('department', dept);
+    if (sem) params.set('semester', sem);
+    try {
+      const students = await apiCall(`/students?${params.toString()}`);
+      state.resClassStudents = (students || []).map(s => ({
+        ...s,
+        grades: s.grades || {},
+        attendance: s.attendance || {}
+      }));
+    } catch(err) {
+      console.error('loadResultsClass error:', err);
+    }
+  } else {
+    state.resClassStudents = null;
+  }
+  renderResultsView();
+}
+
 function renderResultsView(){
   const dept = document.getElementById('resDeptFilter').value;
   const sem = document.getElementById('resSemFilter').value;
   const subj = document.getElementById('resSubjectFilter').value || SUBJECTS[0];
   const sort = document.getElementById('resSortFilter').value;
   
-  let list = state.students.filter(s=> (!dept || s.department===dept) && (!sem || s.semester===sem));
+  let list = (state.resClassStudents && state.resClassStudents.length)
+    ? [...state.resClassStudents]
+    : (state.students || []).filter(s=> (!dept || s.department===dept) && (!sem || s.semester===sem));
   
   // Sort Logic
   if (sort === 'rank') {
@@ -1005,7 +1181,7 @@ function renderResultsView(){
   }).join('') || `<tr><td colspan="5"><div class="empty-state"><p>No students found.</p></div></td></tr>`;
 }
 async function updateGrade(id, subj, val){
-  const s = state.students.find(x=>x.id===id);
+  const s = (state.resClassStudents || []).find(x=>x.id===id) || (state.students || []).find(x=>x.id===id);
   if(!s) return;
   let v = parseInt(val,10); if(isNaN(v)) v=0; v = Math.max(0,Math.min(100,v));
   if(!s.grades) s.grades = {};
@@ -1027,46 +1203,92 @@ async function updateGrade(id, subj, val){
     showToast(err.message, 'error');
   }
 }
-['resDeptFilter', 'resSemFilter', 'resSubjectFilter', 'resSortFilter'].forEach(id => {
-  document.getElementById(id).addEventListener('change', renderResultsView);
-});
+document.getElementById('resDeptFilter').addEventListener('change', loadResultsClass);
+document.getElementById('resSemFilter').addEventListener('change', loadResultsClass);
+document.getElementById('resSubjectFilter').addEventListener('change', renderResultsView);
+document.getElementById('resSortFilter').addEventListener('change', renderResultsView);
 
 /* ============================================================
    REPORTS VIEW
 ============================================================ */
-function renderReports(){
-  const generateReportHTML = (dept) => {
-    return SEMESTERS.map(sem=>{
-      const list = state.students.filter(s=>s.department===dept && s.semester===sem);
-      if(!list.length) return `<div class="person-row"><div class="person-info"><div class="person-name">${sem}</div><div class="person-meta">0 students enrolled</div></div></div>`;
-      
-      const avg = Math.round(list.reduce((a,s)=>a+studentAvgGrade(s),0)/list.length);
-      const att = Math.round(list.reduce((a,s)=>a+studentAttendanceRate(s),0)/list.length);
-      
-      return `
-        <div class="person-row">
-          <div class="avatar" style="background:var(--grad-primary)">${sem.split(' ')[1]}</div>
-          <div class="person-info">
-            <div class="person-name">${sem}</div>
-            <div class="person-meta">${list.length} students enrolled</div>
-          </div>
-          <span class="pill pill-class">Avg grade ${avg}%</span>
-          <span class="pill ${att>=75?'pill-active':'pill-inactive'}">Attendance ${att}%</span>
-        </div>
-      `;
-    }).join('');
-  };
+async function renderReports(){
+  const mcaEl = document.getElementById('mcaReportsList');
+  const mbaEl = document.getElementById('mbaReportsList');
+  if(!mcaEl || !mbaEl) return;
 
-  document.getElementById('mcaReportsList').innerHTML = generateReportHTML('MCA');
-  document.getElementById('mbaReportsList').innerHTML = generateReportHTML('MBA');
+  mcaEl.innerHTML = '<div class="empty-state"><p>Loading reports…</p></div>';
+  mbaEl.innerHTML = '<div class="empty-state"><p>Loading reports…</p></div>';
+
+  try {
+    const summaryRows = await apiCall('/reports/summary');
+    const summaryMap = {};
+    (summaryRows || []).forEach(r => {
+      summaryMap[`${r.department}_${r.semester}`] = r;
+    });
+
+    const generateReportHTML = (dept) => {
+      return SEMESTERS.map(sem => {
+        const rec = summaryMap[`${dept}_${sem}`];
+        if(!rec || !rec.students) {
+          return `<div class="person-row"><div class="person-info"><div class="person-name">${esc(sem)}</div><div class="person-meta">0 students enrolled</div></div></div>`;
+        }
+        
+        const count = Number(rec.students) || 0;
+        const avg = Math.round(Number(rec.avgGrade) || 0);
+        const att = Math.round(Number(rec.attendance) || 0);
+        
+        return `
+          <div class="person-row">
+            <div class="avatar" style="background:var(--grad-primary)">${esc(sem.split(' ')[1] || '1')}</div>
+            <div class="person-info">
+              <div class="person-name">${esc(sem)}</div>
+              <div class="person-meta">${count} student${count === 1 ? '' : 's'} enrolled</div>
+            </div>
+            <span class="pill pill-class">Avg grade ${avg}%</span>
+            <span class="pill ${att >= 75 ? 'pill-active' : 'pill-inactive'}">Attendance ${att}%</span>
+          </div>
+        `;
+      }).join('');
+    };
+
+    mcaEl.innerHTML = generateReportHTML('MCA');
+    mbaEl.innerHTML = generateReportHTML('MBA');
+  } catch(err) {
+    console.error('renderReports error:', err);
+    const errHTML = `<div class="empty-state"><p>Failed to load report summary: ${esc(err.message)}</p></div>`;
+    mcaEl.innerHTML = errHTML;
+    mbaEl.innerHTML = errHTML;
+    showToast('Failed to load reports summary: ' + err.message, 'error');
+  }
 }
 
 /* ============================================================
    STUDENT DETAIL DRAWER
 ============================================================ */
-function openDrawer(id){
+async function openDrawer(id){
   state.currentDrawerId = id;
-  const s = state.students.find(x=>x.id===id);
+  let s = (state.pageStudents || []).find(x=>x.id===id)
+       || (state.attClassStudents || []).find(x=>x.id===id)
+       || (state.resClassStudents || []).find(x=>x.id===id)
+       || (state.students || []).find(x=>x.id===id);
+
+  // If student lacks full attendance or grades, load on demand from GET /api/students/:id
+  if (!s || !s.grades || !s.attendance || Object.keys(s.attendance).length === 0) {
+    try {
+      const full = await apiCall(`/students/${id}`);
+      if (full) {
+        s = full;
+        if (state.pageStudents) {
+          const idx = state.pageStudents.findIndex(x=>x.id===id);
+          if (idx !== -1) state.pageStudents[idx] = full;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load student details on demand:', err);
+    }
+  }
+  if (!s) return;
+
   document.getElementById('drawerHeadContent').innerHTML = `
     <div class="drawer-head">
       <div>
@@ -1410,41 +1632,23 @@ document.addEventListener('keydown', (e)=>{
    INIT / REFRESH
 ============================================================ */
 async function initApp() {
-    console.log("1");
     const isAdmin = state.role === 'admin';
-
-    console.log("2");
     document.body.classList.toggle('role-user', !isAdmin);
-
-    console.log("3");
-    document.getElementById('displayRole').textContent =
-        isAdmin ? 'Administrator' : 'User';
-
-    console.log("4");
+    document.getElementById('displayRole').textContent = isAdmin ? 'Administrator' : 'User';
     updateUserDisplay();
-
-    console.log("5");
     loadProfileIntoForm();
+    await loadInstitutionSettings();
 
-    console.log("6");
-    loadInstitutionSettings();
-
-    console.log("7");
-    await fetchStudents();
-
-    console.log("8");
+    // Fast initial load: high-speed dashboard metrics (< 1 KB) + first page of students
+    await loadDashboardStats();
     fetchStudentsPage();
 
-    console.log("9");
     if (isAdmin) {
         fetchUsers();
         fetchAudit();
     }
 
-    console.log("10");
     if (!isAdmin) switchView('attendance');
-
-    console.log("DONE");
 }
 
 function init(){
