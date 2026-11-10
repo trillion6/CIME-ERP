@@ -34,8 +34,10 @@ const adminLimiter = process.env.NODE_ENV === 'test'
     });
 
 router.post('/auth/login', loginLimiter, authCtrl.login);
-// Public self-registration (rate-limited)
-router.post('/auth/register', loginLimiter, authCtrl.register);
+// Public self-registration is disabled for security and institutional account provisioning
+router.post('/auth/register', (req, res) => {
+    res.status(403).json({ error: 'Public registration is disabled. Please contact the institution administrator.' });
+});
 // Email verification link (clicked from the emailed link)
 router.get('/auth/verify-email', authCtrl.verifyEmail);
 // Re-send the verification link (rate-limited; generic 200)
@@ -48,15 +50,15 @@ router.put('/auth/password', loginLimiter, protect, authCtrl.changePassword);
 router.post('/auth/forgot-password', loginLimiter, authCtrl.forgotPassword);
 router.post('/auth/reset-password', loginLimiter, authCtrl.resetPassword);
 
-// High-speed aggregated dashboard metrics (replaces unpaginated student dump for dashboard)
-router.get('/dashboard/stats', protect, studentCtrl.getDashboardStats);
+// High-speed aggregated dashboard metrics (admin only)
+router.get('/dashboard/stats', protect, adminOnly, studentCtrl.getDashboardStats);
 
 router.route('/students')
-    .get(protect, studentCtrl.getStudents)
+    .get(protect, adminOnly, studentCtrl.getStudents)
     .post(protect, adminOnly, studentCtrl.createStudent);
 
 router.route('/students/:id')
-    .get(protect, studentCtrl.getStudentById)
+    .get(protect, adminOnly, studentCtrl.getStudentById)
     .put(protect, adminOnly, studentCtrl.updateStudent)
     .delete(protect, adminOnly, studentCtrl.deleteStudent);
 

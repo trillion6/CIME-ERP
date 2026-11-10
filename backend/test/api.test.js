@@ -229,28 +229,33 @@ test('auth: missing fields rejected', async () => {
     assert.strictEqual((await api('/auth/login', { method: 'POST', body: {} })).status, 400);
 });
 
-test('auth: public registration → email verification → login (full flow)', async () => {
-    const email = `apitest.reg.${Date.now()}@cime.edu`;
+test('auth: public registration is disabled and returns 403 (Phase 2A)', async () => {
+    const res = await api('/auth/register', {
+        method: 'POST',
+        body: { name: 'Public Visitor', email: 'public.visitor@cime.edu', password: 'secret123' }
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.json.error, 'Public registration is disabled. Please contact the institution administrator.');
+});
 
-    // validation
-    assert.strictEqual((await api('/auth/register', { method: 'POST', body: { email, password: 'secret123' } })).status, 400); // no name
-    assert.strictEqual((await api('/auth/register', { method: 'POST', body: { name: 'X', email: 'bad-email', password: 'secret123' } })).status, 400);
-    assert.strictEqual((await api('/auth/register', { method: 'POST', body: { name: 'X', email, password: '123' } })).status, 400); // short password
+test('auth: email verification flow and non-admin student data restriction (Phase 2A)', async () => {
+    const email = `apitest.ver.${Date.now()}@cime.edu`;
+    const userId = uuidv4();
+    const hash = await bcrypt.hash('secret123', 10);
+    const verifyToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(verifyToken).digest('hex');
 
-    // success → 201 with a message + email, NO token (account needs verification first)
-    mailer.lastVerificationLink = null;
-    const r = await api('/auth/register', { method: 'POST', body: { name: 'New User', email, password: 'secret123' } });
-    assert.strictEqual(r.status, 201);
-    assert.strictEqual(r.json.token, undefined);
-    assert.strictEqual(r.json.email, email);
-    assert.ok(mailer.lastVerificationLink, 'a verification email link was emitted');
-    const verifyToken = mailer.lastVerificationLink.split('verify=')[1];
-    assert.ok(verifyToken);
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?,?,?,?,?,0)',
+        [userId, email, 'Verified User', hash, 'user']
+    );
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [userId, tokenHash]
+    );
+    cleanupUserEmails.push(email);
 
-    // duplicate email → 409
-    assert.strictEqual((await api('/auth/register', { method: 'POST', body: { name: 'New User', email, password: 'secret123' } })).status, 409);
-
-    // unverified account CANNOT sign in (403, no enumeration of the flow)
+    // unverified account CANNOT sign in (403)
     assert.strictEqual((await api('/auth/login', { method: 'POST', body: { email, password: 'secret123' } })).status, 403);
 
     // bogus token / missing token → 400
@@ -263,33 +268,48 @@ test('auth: public registration → email verification → login (full flow)', a
     // the token is single-use — a replay is rejected
     assert.strictEqual((await api('/auth/verify-email?token=' + verifyToken, {})).status, 400);
 
-    // now the account can sign in as a non-admin user, with its name returned
+    // now the account can sign in as a non-admin user
     const login = await api('/auth/login', { method: 'POST', body: { email, password: 'secret123' } });
     assert.strictEqual(login.status, 200);
     assert.strictEqual(login.json.role, 'user');
-    assert.strictEqual(login.json.name, 'New User');
-    assert.strictEqual((await api('/students', { token: login.json.token })).status, 200);
-    assert.strictEqual((await api('/users', { token: login.json.token })).status, 403);
+    assert.strictEqual(login.json.name, 'Verified User');
+    const userToken = login.json.token;
 
-    // registration + verification are audited
+    // Phase 2A security restrictions: non-admin user is rejected with 403 on student data & dashboard
+    assert.strictEqual((await api('/students', { token: userToken })).status, 403);
+    assert.strictEqual((await api('/students/' + userId, { token: userToken })).status, 403);
+    assert.strictEqual((await api('/dashboard/stats', { token: userToken })).status, 403);
+    assert.strictEqual((await api('/users', { token: userToken })).status, 403);
+
+    // Admin user CAN access /students and /dashboard/stats
+    assert.strictEqual((await api('/students', { token: adminToken })).status, 200);
+    assert.strictEqual((await api('/dashboard/stats', { token: adminToken })).status, 200);
+
+    // verification is audited
     const logs = await api('/audit?limit=50', { token: adminToken });
-    assert.ok(logs.json.some(l => l.action === 'auth.registered' && l.details === email));
     assert.ok(logs.json.some(l => l.action === 'auth.email_verified' && l.details === email));
 
     // cleanup
-    const users = await api('/users', { token: adminToken });
-    const target = users.json.find(u => u.email === email);
-    await api(`/users/${target.id}`, { method: 'DELETE', token: adminToken });
+    await api(`/users/${userId}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupUserEmails, email);
 });
 
 test('auth: resend-verification emails a fresh one-time link', async () => {
     const email = `apitest.resend.${Date.now()}@cime.edu`;
+    const userId = uuidv4();
+    const hash = await bcrypt.hash('secret123', 10);
+    const firstToken = crypto.randomBytes(32).toString('hex');
+    const firstTokenHash = crypto.createHash('sha256').update(firstToken).digest('hex');
 
-    // register (account is unverified, a first link is emitted)
-    mailer.lastVerificationLink = null;
-    assert.strictEqual((await api('/auth/register', { method: 'POST', body: { name: 'Resend Me', email, password: 'secret123' } })).status, 201);
-    const firstToken = mailer.lastVerificationLink.split('verify=')[1];
-    assert.ok(firstToken);
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?,?,?,?,?,0)',
+        [userId, email, 'Resend Me', hash, 'user']
+    );
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [userId, firstTokenHash]
+    );
+    cleanupUserEmails.push(email);
 
     // validation: bad email → 400; unknown email → 200 (no enumeration, no link)
     assert.strictEqual((await api('/auth/resend-verification', { method: 'POST', body: { email: 'bad' } })).status, 400);
@@ -310,9 +330,8 @@ test('auth: resend-verification emails a fresh one-time link', async () => {
     assert.strictEqual((await api('/auth/login', { method: 'POST', body: { email, password: 'secret123' } })).status, 200);
 
     // cleanup
-    const users = await api('/users', { token: adminToken });
-    const target = users.json.find(u => u.email === email);
-    await api(`/users/${target.id}`, { method: 'DELETE', token: adminToken });
+    await api(`/users/${userId}`, { method: 'DELETE', token: adminToken });
+    removeFrom(cleanupUserEmails, email);
 });
 
 test('auth: user can update their own profile name', async () => {
@@ -616,7 +635,7 @@ test('attendance: invalid attendance status returns 400', async () => {
 });
 
 /* ------------------------ ROLES ------------------------- */
-test('roles: non-admin can read students but cannot mutate students, attendance, or grades', async () => {
+test('roles: non-admin cannot read students or mutate students, attendance, or grades (Phase 2A)', async () => {
     const email = `apitest.user.${Date.now()}@cime.edu`;
     assert.strictEqual((await api('/users', { method: 'POST', token: adminToken, body: { email, password: 'secret123', role: 'user' } })).status, 201);
     cleanupUserEmails.push(email);
@@ -626,7 +645,8 @@ test('roles: non-admin can read students but cannot mutate students, attendance,
     const userToken = login.json.token;
     assert.strictEqual(login.json.role, 'user');
 
-    assert.strictEqual((await api('/students', { token: userToken })).status, 200);
+    // Phase 2A: Non-admin cannot read students
+    assert.strictEqual((await api('/students', { token: userToken })).status, 403);
     assert.strictEqual((await api('/students', { method: 'POST', token: userToken, body: { name: 'X', email: 'x@y.z' } })).status, 403);
     assert.strictEqual((await api('/users', { token: userToken })).status, 403);
 
@@ -701,7 +721,7 @@ test('auth: admin can reset another user password (and users cannot)', async () 
 
 test('auth: deleted users lose access immediately (token revocation)', async () => {
     const email = `apitest.revoke.${Date.now()}@cime.edu`;
-    await api('/users', { method: 'POST', token: adminToken, body: { email, password: 'secret123', role: 'user' } });
+    await api('/users', { method: 'POST', token: adminToken, body: { email, password: 'secret123', role: 'admin' } });
     const login = await api('/auth/login', { method: 'POST', body: { email, password: 'secret123' } });
     const userToken = login.json.token;
     assert.strictEqual((await api('/students', { token: userToken })).status, 200);
@@ -943,31 +963,18 @@ let p1bAdminToken;
 
 test('phase1b: authenticate active admin session', async () => {
     // Note: The initial seed admin (id1) was deleted in Test 30 to verify multi-admin guardrails.
-    // Register and authenticate a dedicated, active administrator fixture for Phase 1B verification.
+    // Create and authenticate a dedicated, active administrator fixture for Phase 1B verification.
     const p1bEmail = `p1b.admin.${Date.now()}@cime.edu`;
     const p1bPass = 'P1bSecureAdminPass#2026';
-    const reg = await api('/auth/register', {
-        method: 'POST',
-        body: { name: 'P1B Admin', email: p1bEmail, password: p1bPass }
-    });
-
-    // 1. Immediately register fixture email for teardown cleanup
+    const id = uuidv4();
+    const hash = await bcrypt.hash(p1bPass, 10);
+    await pool.query(
+        'INSERT INTO users (id, name, email, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 1)',
+        [id, 'P1B Admin', p1bEmail, hash, 'admin']
+    );
     cleanupUserEmails.push(p1bEmail);
 
-    // 2. Verify registration response and required account fields
-    assert.strictEqual(reg.status, 201);
-    assert.strictEqual(reg.json.email, p1bEmail);
-    assert.strictEqual(reg.json.token, undefined);
-    assert.ok(typeof reg.json.message === 'string' && reg.json.message.length > 0);
-
-    // 3. Promote fixture user to admin and mark email verified in cohort_erp_test
-    const [updateResult] = await pool.query(
-        'UPDATE users SET role = ?, email_verified = 1 WHERE email = ?',
-        ['admin', p1bEmail]
-    );
-    assert.strictEqual(updateResult.affectedRows, 1);
-
-    // 4. Authenticate through existing login API and capture fresh p1bAdminToken
+    // Authenticate through existing login API and capture fresh p1bAdminToken
     const login = await api('/auth/login', {
         method: 'POST',
         body: { email: p1bEmail, password: p1bPass }
@@ -1086,11 +1093,14 @@ test('settings: unauthenticated access to protected settings rejected with 401 (
 test('settings: authenticated non-admin user can read settings but cannot modify them (Phase 1C)', async () => {
     const uEmail = `user.settings.${Date.now()}@cime.edu`;
     const uPass = 'UserPassSecure#2026';
-    const reg = await api('/auth/register', { method: 'POST', body: { name: 'Settings User', email: uEmail, password: uPass } });
-    assert.strictEqual(reg.status, 201);
+    const createRes = await api('/users', {
+        method: 'POST',
+        token: p1bAdminToken,
+        body: { email: uEmail, password: uPass, role: 'user' }
+    });
+    assert.strictEqual(createRes.status, 201);
     cleanupUserEmails.push(uEmail);
 
-    await pool.query('UPDATE users SET email_verified = 1 WHERE email = ?', [uEmail]);
     const login = await api('/auth/login', { method: 'POST', body: { email: uEmail, password: uPass } });
     assert.strictEqual(login.status, 200);
     const userToken = login.json.token;
@@ -1290,81 +1300,38 @@ test('reports: reject PDF generation with 503 during settings database outage (P
      and deterministic token collisions (no SUPER triggers needed).
 ============================================================ */
 
-test('auth: registration rolls back user record if token insert fails (Phase 1D)', async () => {
-    // 1. Create a dummy test user and pre-seed a colliding token in email_verifications
-    const dummyEmail = `apitest.dummy.regcol.${Date.now()}@cime.edu`;
-    const dummyUserId = uuidv4();
-    await pool.query(
-        'INSERT INTO users (id, email, password_hash, role, email_verified) VALUES (?, ?, ?, ?, 0)',
-        [dummyUserId, dummyEmail, 'dummyhash', 'user']
-    );
-    cleanupUserEmails.push(dummyEmail);
-
-    const rawBuffer = Buffer.alloc(32, 0x41);
-    const hexToken = rawBuffer.toString('hex');
-    const collisionHash = crypto.createHash('sha256').update(hexToken).digest('hex');
-    await pool.query(
-        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
-        [dummyUserId, collisionHash]
-    );
-
-    const targetEmail = `apitest.reg.rollback.${Date.now()}@cime.edu`;
-
-    // 2. Mock crypto.randomBytes to return rawBuffer during registration
-    const origRandomBytes = crypto.randomBytes;
-    try {
-        crypto.randomBytes = () => rawBuffer;
-
-        // Registration attempt must fail with 500 because the token_hash UNIQUE constraint collides with dummy user's token
-        const res = await api('/auth/register', {
-            method: 'POST',
-            body: { name: 'Rollback User', email: targetEmail, password: 'password123' }
-        });
-        assert.strictEqual(res.status, 500);
-
-        // Verification: The transaction must have rolled back the user creation completely
-        const [rows] = await pool.query('SELECT id FROM users WHERE email = ?', [targetEmail]);
-        assert.strictEqual(rows.length, 0, 'No orphaned user record must remain in users table after token insert collision');
-    } finally {
-        crypto.randomBytes = origRandomBytes;
-    }
-
-    // 3. After transient collision is resolved, registration with the exact same email must succeed (not fail with 409)
-    const retry = await api('/auth/register', {
+test('auth: public registration is rejected with 403 and creates no user records (Phase 2A)', async () => {
+    const targetEmail = `apitest.reg.disabled.${Date.now()}@cime.edu`;
+    const res = await api('/auth/register', {
         method: 'POST',
-        body: { name: 'Rollback User', email: targetEmail, password: 'password123' }
+        body: { name: 'Attempted User', email: targetEmail, password: 'password123' }
     });
-    assert.strictEqual(retry.status, 201);
-    assert.strictEqual(retry.json.email, targetEmail);
-    cleanupUserEmails.push(targetEmail);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.json.error, 'Public registration is disabled. Please contact the institution administrator.');
 
-    // Verify user now exists in users table and has an active token in email_verifications
-    const [freshUsers] = await pool.query('SELECT id, email_verified FROM users WHERE email = ?', [targetEmail]);
-    assert.strictEqual(freshUsers.length, 1);
-    assert.strictEqual(Number(freshUsers[0].email_verified), 0);
-    const [freshTokens] = await pool.query('SELECT id, used_at FROM email_verifications WHERE user_id = ?', [freshUsers[0].id]);
-    assert.strictEqual(freshTokens.length, 1);
-    assert.strictEqual(freshTokens[0].used_at, null);
+    // Confirm that no user record was created in the database
+    const [rows] = await pool.query('SELECT id FROM users WHERE email = ?', [targetEmail]);
+    assert.strictEqual(rows.length, 0);
 });
 
 test('auth: verify-email rolls back token claim if user activation fails (Phase 1D)', async () => {
     const chkName = 'chk_test_fail_activation';
     const email = `apitest.ver.rollback.${Date.now()}@cime.edu`;
 
-    // 1. Register a valid unverified test user
-    mailer.lastVerificationLink = null;
-    const reg = await api('/auth/register', {
-        method: 'POST',
-        body: { name: 'Verify Rollback User', email, password: 'password123' }
-    });
-    assert.strictEqual(reg.status, 201);
-    cleanupUserEmails.push(email);
-
-    const token = mailer.lastVerificationLink.split('verify=')[1];
+    // 1. Create a valid unverified test user with verification token
+    const targetUserId = uuidv4();
+    const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-
-    const [uRows] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
-    const targetUserId = uRows[0].id;
+    const hash = await bcrypt.hash('password123', 10);
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 0)',
+        [targetUserId, email, 'Verify Rollback User', hash, 'user']
+    );
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [targetUserId, tokenHash]
+    );
+    cleanupUserEmails.push(email);
 
     try {
         // 2. Install narrowly scoped CHECK constraint valid for existing rows but rejecting only targetUserId activation
@@ -1476,15 +1443,21 @@ test('auth: resend-verification preserves prior tokens if replacement insert fai
         [dummyUserId, collisionHash]
     );
 
-    // 2. Register target test user -> generates initial token
+    // 2. Create target unverified test user with initial token
+    const targetUserId = uuidv4();
     const targetEmail = `apitest.resend.rollback.${Date.now()}@cime.edu`;
-    mailer.lastVerificationLink = null;
-    await api('/auth/register', {
-        method: 'POST',
-        body: { name: 'Resend Rollback User', email: targetEmail, password: 'password123' }
-    });
+    const firstToken = crypto.randomBytes(32).toString('hex');
+    const firstTokenHash = crypto.createHash('sha256').update(firstToken).digest('hex');
+    const hash = await bcrypt.hash('password123', 10);
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 0)',
+        [targetUserId, targetEmail, 'Resend Rollback User', hash, 'user']
+    );
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [targetUserId, firstTokenHash]
+    );
     cleanupUserEmails.push(targetEmail);
-    const firstToken = mailer.lastVerificationLink.split('verify=')[1];
 
     // 3. Mock crypto.randomBytes to return rawBuffer during resend-verification
     const origRandomBytes = crypto.randomBytes;
@@ -1598,13 +1571,19 @@ test('auth: concurrent reset-password requests are serialized atomically (Phase 
 
 test('auth: concurrent verify-email requests are serialized atomically (Phase 1D)', async () => {
     const email = `apitest.concurr.ver.${Date.now()}@cime.edu`;
-    mailer.lastVerificationLink = null;
-    await api('/auth/register', {
-        method: 'POST',
-        body: { name: 'Concurrent Verify User', email, password: 'password123' }
-    });
+    const userId = uuidv4();
+    const verifyToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(verifyToken).digest('hex');
+    const hash = await bcrypt.hash('password123', 10);
+    await pool.query(
+        'INSERT INTO users (id, email, name, password_hash, role, email_verified) VALUES (?, ?, ?, ?, ?, 0)',
+        [userId, email, 'Concurrent Verify User', hash, 'user']
+    );
+    await pool.query(
+        'INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
+        [userId, tokenHash]
+    );
     cleanupUserEmails.push(email);
-    const verifyToken = mailer.lastVerificationLink.split('verify=')[1];
 
     // Fire two verification requests with the exact same token concurrently
     const [r1, r2] = await Promise.all([
@@ -1616,43 +1595,32 @@ test('auth: concurrent verify-email requests are serialized atomically (Phase 1D
     assert.deepStrictEqual(statuses, [200, 400], 'Exactly one concurrent verification succeeds (200) and the other is rejected (400)');
 });
 
-test('auth: registration accurately reports email delivery failure when mailer fails (Phase 1D)', async () => {
-    const email = `apitest.mailfail.${Date.now()}@cime.edu`;
-    mailer.lastVerificationLink = null;
-    mailer._simulatedFailure = true;
+test('auth: administrator-created user accounts work and non-admin users are restricted from student reads (Phase 2A)', async () => {
+    const email = `admincreated.${Date.now()}@cime.edu`;
+    const createRes = await api('/users', {
+        method: 'POST',
+        token: p1bAdminToken,
+        body: { email, password: 'UserPass123!', role: 'user' }
+    });
+    assert.strictEqual(createRes.status, 201);
+    cleanupUserEmails.push(email);
 
-    try {
-        const res = await api('/auth/register', {
-            method: 'POST',
-            body: { name: 'Mailer Fail User', email, password: 'password123' }
-        });
-        assert.strictEqual(res.status, 201);
-        assert.strictEqual(res.json.email, email);
-        assert.strictEqual(res.json.emailDelivered, false);
-        assert.ok(
-            res.json.message.includes('could not be delivered') || res.json.message.includes('resend verification'),
-            'Accurately communicates delivery failure without claiming verification email was dispatched'
-        );
-        cleanupUserEmails.push(email);
+    const loginRes = await api('/auth/login', {
+        method: 'POST',
+        body: { email, password: 'UserPass123!' }
+    });
+    assert.strictEqual(loginRes.status, 200);
+    assert.strictEqual(loginRes.json.role, 'user');
+    const nonAdminToken = loginRes.json.token;
 
-        // Account is still created in the database and can be verified via resend-verification
-        const [userRows] = await pool.query('SELECT id, email_verified FROM users WHERE email = ?', [email]);
-        assert.strictEqual(userRows.length, 1);
-        assert.strictEqual(Number(userRows[0].email_verified), 0);
-    } finally {
-        mailer._simulatedFailure = false;
-    }
+    // Phase 2A security restrictions: non-admin user cannot read student data or dashboard stats
+    assert.strictEqual((await api('/students', { token: nonAdminToken })).status, 403);
+    assert.strictEqual((await api('/students/any-student-uuid', { token: nonAdminToken })).status, 403);
+    assert.strictEqual((await api('/dashboard/stats', { token: nonAdminToken })).status, 403);
 
-    // Now resend-verification with restored mailer succeeds
-    mailer.lastVerificationLink = null;
-    const resendRes = await api('/auth/resend-verification', { method: 'POST', body: { email } });
-    assert.strictEqual(resendRes.status, 200);
-    assert.ok(mailer.lastVerificationLink, 'Resend verification emits link after mailer restoration');
-    const freshToken = mailer.lastVerificationLink.split('verify=')[1];
-
-    // Complete verification
-    const verifyRes = await api('/auth/verify-email?token=' + freshToken);
-    assert.strictEqual(verifyRes.status, 200);
+    // Phase 2A security confirmation: admin CAN read students and dashboard stats
+    assert.strictEqual((await api('/students', { token: p1bAdminToken })).status, 200);
+    assert.strictEqual((await api('/dashboard/stats', { token: p1bAdminToken })).status, 200);
 });
 
 test('auth: resend and forgot-password preserve anti-enumeration responses during mailer failure (Phase 1D)', async () => {
